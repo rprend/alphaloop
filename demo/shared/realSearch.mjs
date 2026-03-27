@@ -172,16 +172,36 @@ export function createVectorizeSearch({
   scenario,
   embeddingModel,
   embeddingDimensions,
+  apiKey,
+  embeddingModelId,
   pageSize = 500,
   onSearchStats,
 }) {
   const rankingCache = new Map();
 
-  async function getRankedBaseChunks(query) {
-    const cacheKey = query.trim().toLowerCase();
-    const cached = rankingCache.get(cacheKey);
-    if (cached) {
-      return cached;
+  async function createQueryEmbedding(query) {
+    if (apiKey && embeddingModelId) {
+      const response = await fetch("https://api.openai.com/v1/embeddings", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: embeddingModelId,
+          input: query,
+          dimensions: embeddingDimensions,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          `Embedding request failed (${response.status}): ${await response.text()}`,
+        );
+      }
+
+      const json = await response.json();
+      return json.data?.[0]?.embedding || [];
     }
 
     const { embedding } = await embed({
@@ -195,6 +215,18 @@ export function createVectorizeSearch({
           }
         : undefined,
     });
+
+    return embedding;
+  }
+
+  async function getRankedBaseChunks(query) {
+    const cacheKey = query.trim().toLowerCase();
+    const cached = rankingCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const embedding = await createQueryEmbedding(query);
     const normalizedQuery = normalizeVector(embedding);
     const topK = Math.max(1000, totalChunks || 0);
 

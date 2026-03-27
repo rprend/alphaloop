@@ -91,7 +91,7 @@ export class RunJob extends DurableObject {
           return new Response("Unknown scenario", { status: 400 });
         }
 
-        const job = {
+      const job = {
           status: "queued",
           events: [INITIAL_EVENT],
           result: null,
@@ -102,9 +102,13 @@ export class RunJob extends DurableObject {
           query: body.query || scenario.query,
           error: null,
           request: body,
-        };
-        await this.ctx.storage.put("job", job);
-        await this.ctx.storage.setAlarm(Date.now() + 100);
+      };
+      console.log("run-job init", {
+        id: this.ctx.id.toString(),
+        scenarioId: body.scenarioId,
+      });
+      await this.ctx.storage.put("job", job);
+      await this.ctx.storage.setAlarm(Date.now() + 100);
 
         return Response.json(
           {
@@ -145,8 +149,14 @@ export class RunJob extends DurableObject {
   }
 
   async alarm() {
+    console.log("run-job alarm", { id: this.ctx.id.toString() });
     const job = await this.ctx.storage.get("job");
     if (!job?.request || job.status === "completed") {
+      console.log("run-job alarm noop", {
+        id: this.ctx.id.toString(),
+        status: job?.status,
+        hasRequest: Boolean(job?.request),
+      });
       return;
     }
     await this.execute(job.request);
@@ -154,12 +164,23 @@ export class RunJob extends DurableObject {
 
   async execute(body) {
     try {
-      const existing = (await this.ctx.storage.get("job")) || {
+      console.log("run-job execute start", {
+        id: this.ctx.id.toString(),
+        scenarioId: body.scenarioId,
+      });
+      let jobState = (await this.ctx.storage.get("job")) || {
         status: "queued",
         events: [INITIAL_EVENT],
       };
-      await this.ctx.storage.put("job", {
-        ...existing,
+      const persist = (patch) => {
+        jobState = {
+          ...jobState,
+          ...patch,
+        };
+        return this.ctx.storage.put("job", jobState);
+      };
+      await persist({
+        ...jobState,
         status: "running",
       });
 
@@ -177,7 +198,7 @@ export class RunJob extends DurableObject {
       const embeddingDimensions = Number(
         this.env.OPENAI_EMBEDDING_DIMENSIONS || 1536,
       );
-      const events = [INITIAL_EVENT];
+      const events = [...(jobState.events || [INITIAL_EVENT])];
       const search = createVectorizeSearch({
         index: this.env.CORPUS_INDEX,
         totalChunks: indexInfo.vectorCount,
@@ -186,6 +207,9 @@ export class RunJob extends DurableObject {
           this.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-large",
         ),
         embeddingDimensions,
+        apiKey: this.env.OPENAI_API_KEY,
+        embeddingModelId:
+          this.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-large",
       });
 
       const run = await runRealStressScenario({
@@ -205,10 +229,16 @@ export class RunJob extends DurableObject {
         maxIterations: body.maxIterations,
         onEvent(event) {
           events.push(event);
+          this.ctx.waitUntil(
+            persist({
+              status: "running",
+              events: [...events],
+            }),
+          );
         },
       });
 
-      await this.ctx.storage.put("job", {
+      await persist({
         status: "completed",
         events,
         result: {
@@ -228,6 +258,10 @@ export class RunJob extends DurableObject {
         query: run.query,
         error: null,
         request: body,
+      });
+      console.log("run-job execute complete", {
+        id: this.ctx.id.toString(),
+        totalMatched: run.result.totalChunksMatched,
       });
     } catch (error) {
       console.error("alphaloop worker error", error);
