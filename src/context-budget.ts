@@ -143,22 +143,78 @@ export async function reduceChunksToSummary(
   depth = 1,
 ): Promise<string> {
   ctx.recursionDepth = Math.max(ctx.recursionDepth, depth);
+  const maxTokens = availablePromptTokens(ctx);
+  const separator = "\n\n---\n\n";
+  let totalTokens = 0;
+  let usingShards = false;
+  let normalized: string[] = [];
+  let shards: string[][] = [];
+  let currentShard: string[] = [];
+  let currentShardTokens = 0;
 
-  const normalized = await Promise.all(
-    chunks.map((chunk) => normalizeChunkForModel(chunk, query, ctx, depth + 1)),
-  );
-  const combined = normalized.join("\n\n---\n\n");
+  for (const chunk of chunks) {
+    const normalizedChunk = await normalizeChunkForModel(
+      chunk,
+      query,
+      ctx,
+      depth + 1,
+    );
+    const chunkTokens =
+      estimateTokens(normalizedChunk, ctx) +
+      (totalTokens > 0 ? estimateTokens(separator, ctx) : 0);
 
-  if (estimateTokens(combined, ctx) <= availablePromptTokens(ctx)) {
-    return combined;
+    if (!usingShards) {
+      normalized.push(normalizedChunk);
+      totalTokens += chunkTokens;
+
+      if (totalTokens > maxTokens) {
+        usingShards = true;
+        shards = shardByTokens(normalized, (item) => item, ctx);
+        const lastShard = shards.pop();
+        currentShard = lastShard ? [...lastShard] : [];
+        currentShardTokens = currentShard.reduce(
+          (sum, item, index) =>
+            sum +
+            estimateTokens(item, ctx) +
+            (index > 0 ? estimateTokens(separator, ctx) : 0),
+          0,
+        );
+        normalized = [];
+      }
+      continue;
+    }
+
+    const separatorTokens =
+      currentShard.length > 0 ? estimateTokens(separator, ctx) : 0;
+    if (
+      currentShard.length > 0 &&
+      currentShardTokens + separatorTokens + estimateTokens(normalizedChunk, ctx) >
+        maxTokens
+    ) {
+      shards.push(currentShard);
+      currentShard = [];
+      currentShardTokens = 0;
+    }
+
+    currentShard.push(normalizedChunk);
+    currentShardTokens +=
+      estimateTokens(normalizedChunk, ctx) +
+      (currentShard.length > 1 ? estimateTokens(separator, ctx) : 0);
   }
 
-  const shards = shardByTokens(normalized, (item) => item, ctx);
+  if (!usingShards) {
+    return normalized.join(separator);
+  }
+
+  if (currentShard.length > 0) {
+    shards.push(currentShard);
+  }
+
   ctx.shardCount += shards.length;
 
   const reduced = await Promise.all(
     shards.map(async (shard, index) => {
-      const shardText = shard.join("\n\n---\n\n");
+      const shardText = shard.join(separator);
       const { object } = await generateObject({
         model: ctx.config.model,
         schema: SummarySchema,
@@ -178,7 +234,13 @@ ${shardText}`,
     }),
   );
 
-  return summarizeTextRecursively(label, reduced.join("\n\n"), query, ctx, depth + 1);
+  return summarizeTextRecursively(
+    label,
+    reduced.join("\n\n"),
+    query,
+    ctx,
+    depth + 1,
+  );
 }
 
 function splitTextByTokens(

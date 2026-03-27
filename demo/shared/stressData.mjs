@@ -122,6 +122,17 @@ export const STRESS_SCENARIOS = {
     minScore: 0.55,
     virtual: true,
   },
+  branch3600: {
+    id: "branch3600",
+    label: "Hundreds of millions",
+    documents: 18000,
+    paragraphsPerDoc: 9,
+    wordsPerParagraph: 240,
+    query: "atlas recursion ledger",
+    minScore: 0.55,
+    virtual: true,
+    tokenMultiplier: 10,
+  },
 };
 
 export function createScenarioDataset(scenarioId) {
@@ -136,8 +147,12 @@ export function createScenarioDataset(scenarioId) {
       scenario,
       chunks: [],
       documentCount: scenario.documents,
-      estimatedTokens: Math.ceil(sampleText.length / 4) * scenario.documents,
-      sampleTokensPerChunk: Math.ceil(sampleText.length / 4),
+      estimatedTokens:
+        Math.ceil(sampleText.length / 4) *
+        (scenario.tokenMultiplier ?? 1) *
+        scenario.documents,
+      sampleTokensPerChunk:
+        Math.ceil(sampleText.length / 4) * (scenario.tokenMultiplier ?? 1),
     };
   }
 
@@ -177,7 +192,9 @@ export function createScenarioDataset(scenarioId) {
     documentCount: chunks.length,
     estimatedTokens,
     sampleTokensPerChunk:
-      chunks.length > 0 ? Math.ceil(chunks[0].text.length / 4) : 0,
+      chunks.length > 0
+        ? Math.ceil(chunks[0].text.length / 4) * (scenario.tokenMultiplier ?? 1)
+        : 0,
   };
 }
 

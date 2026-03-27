@@ -18,6 +18,11 @@ function buildLoop(dataset, searchStatsRef) {
     minScore: dataset.scenario.minScore,
     maxExpandedQueries: 4,
     maxIterations: 1,
+    tokenEstimator:
+      dataset.scenario.tokenMultiplier == null
+        ? undefined
+        : (text) =>
+            Math.ceil(text.length / 4) * dataset.scenario.tokenMultiplier,
     search: async (query, options) => {
       const page = await searchScenario(dataset, query, options);
       searchStatsRef.totalStrongMatches = Math.max(

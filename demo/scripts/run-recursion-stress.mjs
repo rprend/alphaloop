@@ -4,7 +4,7 @@ import { createAlphaloop } from "../../dist/index.js";
 import { createSyntheticLanguageModel } from "../shared/fakeModel.mjs";
 import { createScenarioDataset, searchScenario } from "../shared/stressData.mjs";
 
-const SCENARIOS = ["branch2", "branch8", "branch36", "branch360"];
+const SCENARIOS = ["branch2", "branch8", "branch36", "branch360", "branch3600"];
 
 function formatNumber(value) {
   return value.toLocaleString();
@@ -24,6 +24,11 @@ async function runScenario(scenarioId) {
     minScore: dataset.scenario.minScore,
     maxExpandedQueries: 4,
     maxIterations: 1,
+    tokenEstimator:
+      dataset.scenario.tokenMultiplier == null
+        ? undefined
+        : (text) =>
+            Math.ceil(text.length / 4) * dataset.scenario.tokenMultiplier,
     search: async (query, options) => {
       const page = await searchScenario(dataset, query, options);
       searchStats.totalStrongMatches = Math.max(
@@ -88,7 +93,7 @@ console.log("Built demo app.");
 let previous;
 for (const scenarioId of SCENARIOS) {
   const current = await runScenario(scenarioId);
-  if (scenarioId === "branch360" && previous) {
+  if ((scenarioId === "branch360" || scenarioId === "branch3600") && previous) {
     const ratio = current.shardCount / previous.shardCount;
     console.log(`Shard scale vs previous largest case: ${ratio.toFixed(2)}x`);
     if (ratio < 9) {
