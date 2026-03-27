@@ -51,33 +51,56 @@ export default function App() {
         throw new Error(`Request failed (${response.status})`);
       }
 
-      const payload = await response.json();
-      if (payload.error) {
-        throw new Error(payload.error);
+      const started = await response.json();
+      const jobId = started.jobId;
+      if (!jobId) {
+        throw new Error("Missing job id");
       }
 
-      startTransition(() => {
-        setEvents(payload.events || []);
-        setCitations(payload.result.chunks);
-        setSummary({
-          totalConsidered: payload.result.totalChunksConsidered,
-          totalMatched: payload.result.totalChunksMatched,
-          recursionDepth: payload.result.recursionDepth,
-          shardCount: payload.result.shardCount,
-          iterationsRun: payload.result.iterations.length,
-          estimatedTokens: payload.searchStats.maxEstimatedTokens,
-          embeddedChunks: payload.stats.embeddedChunks,
-          virtualChunks: payload.stats.virtualChunks,
-          strongMatches: payload.searchStats.maxStrongMatches,
-          baseMatches: payload.searchStats.maxBaseMatches,
-          modelId: payload.runtime.modelId,
-          rerankModelId: payload.runtime.rerankModelId,
-          embeddingModelId: payload.runtime.embeddingModelId,
-          mode: payload.runtime.topKUsed == null ? "minScore" : "topK",
-          minScoreUsed: payload.runtime.minScoreUsed,
-          topKUsed: payload.runtime.topKUsed,
+      while (true) {
+        const statusResponse = await fetch(`/api/run/${jobId}`, {
+          cache: "no-store",
         });
-      });
+        if (!statusResponse.ok) {
+          throw new Error(`Status request failed (${statusResponse.status})`);
+        }
+
+        const payload = await statusResponse.json();
+        startTransition(() => {
+          setEvents(payload.events || []);
+        });
+
+        if (payload.status === "completed") {
+          startTransition(() => {
+            setCitations(payload.result.chunks);
+            setSummary({
+              totalConsidered: payload.result.totalChunksConsidered,
+              totalMatched: payload.result.totalChunksMatched,
+              recursionDepth: payload.result.recursionDepth,
+              shardCount: payload.result.shardCount,
+              iterationsRun: payload.result.iterations.length,
+              estimatedTokens: payload.searchStats.maxEstimatedTokens,
+              embeddedChunks: payload.stats.embeddedChunks,
+              virtualChunks: payload.stats.virtualChunks,
+              strongMatches: payload.searchStats.maxStrongMatches,
+              baseMatches: payload.searchStats.maxBaseMatches,
+              modelId: payload.runtime.modelId,
+              rerankModelId: payload.runtime.rerankModelId,
+              embeddingModelId: payload.runtime.embeddingModelId,
+              mode: payload.runtime.topKUsed == null ? "minScore" : "topK",
+              minScoreUsed: payload.runtime.minScoreUsed,
+              topKUsed: payload.runtime.topKUsed,
+            });
+          });
+          break;
+        }
+
+        if (payload.status === "error") {
+          throw new Error(payload.error || "Unknown worker error");
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
     } catch (runError) {
       startTransition(() => {
         setError(runError instanceof Error ? runError.message : "Unknown error");

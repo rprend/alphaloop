@@ -7,10 +7,19 @@ directory = "./demo/dist"
 binding = "ASSETS"
 
 [vars]
-OPENAI_MODEL = "gpt-5.2"
+OPENAI_MODEL = "gpt-5.4-mini"
+OPENAI_RERANK_MODEL = "gpt-5.4-mini"
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-large"
 OPENAI_EMBEDDING_DIMENSIONS = "1536"
 
 [[vectorize]]
 binding = "CORPUS_INDEX"
 index_name = "alphaloop-recursion-lab-chunks"
+
+[[durable_objects.bindings]]
+name = "RUN_JOBS"
+class_name = "RunJob"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RunJob"]
