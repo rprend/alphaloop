@@ -45,7 +45,9 @@
     "typecheck": "tsc --noEmit",
     "demo": "vite --config demo/vite.config.js",
     "demo:build": "vite build --config demo/vite.config.js",
-    "demo:stress": "npm run build && node demo/scripts/run-recursion-stress.mjs"
+    "demo:stress": "npm run build && node demo/scripts/run-recursion-stress.mjs",
+    "demo:dataset": "node demo/scripts/generate-real-dataset.mjs",
+    "demo:real-stress": "npm run build && node demo/scripts/run-real-recursion-stress.mjs"
   },
   "peerDependencies": {
     "@assistant-ui/react": "^0.12.0",
@@ -76,5 +78,8 @@
     "typescript": "^5.7.0",
     "vite": "^8.0.3",
     "zod": "^3.23.0"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^3.0.48"
   }
 }

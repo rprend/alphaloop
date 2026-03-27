@@ -69,6 +69,15 @@ Generate ${count} NEW search queries that explore concepts discovered in these p
         chunksFound: 0,
         totalUniqueChunks: ctx.seenChunks.size,
       });
+      ctx.emit({
+        type: "iterative_search",
+        iteration,
+        newQueries: [],
+        newChunksFound: 0,
+        totalUnique: ctx.seenChunks.size,
+        shardCount: ctx.shardCount,
+        recursionDepth: ctx.recursionDepth,
+      });
       break; // No new angles to explore
     }
 

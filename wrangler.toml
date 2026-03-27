@@ -1,0 +1,11 @@
+name = "alphaloop-recursion-lab"
+main = "demo/worker.mjs"
+compatibility_date = "2026-03-27"
+
+[assets]
+directory = "./demo/dist"
+binding = "ASSETS"
+
+[vars]
+OPENAI_MODEL = "gpt-5.2"
+OPENAI_EMBEDDING_MODEL = "text-embedding-3-large"

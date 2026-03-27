@@ -63,52 +63,47 @@ export async function summarizeTextRecursively(
   ctx: LoopContext,
   depth = 1,
 ): Promise<string> {
-  ctx.recursionDepth = Math.max(ctx.recursionDepth, depth);
+  let currentLabel = label;
+  let currentText = text;
+  let currentDepth = depth;
 
-  if (estimateTokens(text, ctx) <= availablePromptTokens(ctx)) {
-    return text;
-  }
+  while (estimateTokens(currentText, ctx) > availablePromptTokens(ctx)) {
+    ctx.recursionDepth = Math.max(ctx.recursionDepth, currentDepth);
+    const maxSegmentTokens = Math.max(
+      4_000,
+      Math.floor(availablePromptTokens(ctx) / 2),
+    );
+    const segments = splitTextByTokens(currentText, maxSegmentTokens, ctx);
+    ctx.shardCount += segments.length;
 
-  const maxSegmentTokens = Math.max(4_000, Math.floor(availablePromptTokens(ctx) / 2));
-  const segments = splitTextByTokens(text, maxSegmentTokens, ctx);
-  ctx.shardCount += segments.length;
+    const summaries = await Promise.all(
+      segments.map(async (segment, index) => {
+        const { object } = await generateObject({
+          model: ctx.config.rerankModel ?? ctx.config.model,
+          schema: SummarySchema,
+          system:
+            "You condense text without dropping any salient facts, concepts, or named identifiers that could affect retrieval or relevance judgment.",
+          prompt: `Query: "${query}"
 
-  const summaries = await Promise.all(
-    segments.map(async (segment, index) => {
-      const normalized = await summarizeTextRecursively(
-        `${label} segment ${index + 1}`,
-        segment,
-        query,
-        ctx,
-        depth + 1,
-      );
-
-      const { object } = await generateObject({
-        model: ctx.config.rerankModel ?? ctx.config.model,
-        schema: SummarySchema,
-        system:
-          "You condense text without dropping any salient facts, concepts, or named identifiers that could affect retrieval or relevance judgment.",
-        prompt: `Query: "${query}"
-
-Label: ${label}
+Label: ${currentLabel} segment ${index + 1}
 
 Produce a compact but information-complete summary of this text:
 
-${normalized}`,
-        abortSignal: ctx.config.signal,
-      });
+${segment}`,
+          abortSignal: ctx.config.signal,
+        });
 
-      return object.summary;
-    }),
-  );
+        return object.summary;
+      }),
+    );
 
-  return summarizeTextRecursively(
-    `${label} merged`,
-    summaries.join("\n\n"),
-    query,
-    ctx,
-    depth + 1,
-  );
+    currentText = summaries.join("\n\n");
+    currentLabel = `${currentLabel} merged`;
+    currentDepth += 1;
+  }
+
+  ctx.recursionDepth = Math.max(ctx.recursionDepth, currentDepth);
+  return currentText;
 }
 
 export async function normalizeChunkForModel(

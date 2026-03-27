@@ -1,122 +1,151 @@
 import { useState, startTransition } from "react";
-import { createAlphaloop } from "alphaloop";
 import { SearchProgress, Citations } from "alphaloop/react";
-import { createSyntheticLanguageModel } from "../shared/fakeModel.mjs";
-import {
-  createScenarioDataset,
-  searchScenario,
-  STRESS_SCENARIOS,
-} from "../shared/stressData.mjs";
-
-const model = createSyntheticLanguageModel();
-const scenarioEntries = Object.values(STRESS_SCENARIOS);
-
-function buildLoop(dataset, searchStatsRef) {
-  return createAlphaloop({
-    model,
-    rerankModel: model,
-    minScore: dataset.scenario.minScore,
-    maxExpandedQueries: 4,
-    maxIterations: 1,
-    tokenEstimator:
-      dataset.scenario.tokenMultiplier == null
-        ? undefined
-        : (text) =>
-            Math.ceil(text.length / 4) * dataset.scenario.tokenMultiplier,
-    search: async (query, options) => {
-      const page = await searchScenario(dataset, query, options);
-      searchStatsRef.totalStrongMatches = Math.max(
-        searchStatsRef.totalStrongMatches,
-        page.totalStrongMatches,
-      );
-      searchStatsRef.estimatedTokens = Math.max(
-        searchStatsRef.estimatedTokens,
-        page.estimatedTokens,
-      );
-      return {
-        chunks: page.chunks,
-        nextCursor: page.nextCursor,
-      };
-    },
-  });
-}
+import { REAL_SCENARIO_LIST, REAL_STRESS_SCENARIOS } from "../shared/realStressScenarios.mjs";
 
 export default function App() {
-  const [scenarioId, setScenarioId] = useState("branch8");
-  const [query, setQuery] = useState(STRESS_SCENARIOS.branch8.query);
+  const [scenarioId, setScenarioId] = useState("recursive");
+  const [query, setQuery] = useState(REAL_STRESS_SCENARIOS.recursive.query);
+  const [mode, setMode] = useState("minScore");
+  const [minScore, setMinScore] = useState(REAL_STRESS_SCENARIOS.recursive.minScore);
+  const [topK, setTopK] = useState(24);
+  const [maxIterations, setMaxIterations] = useState(
+    REAL_STRESS_SCENARIOS.recursive.maxIterations,
+  );
+  const [maxExpandedQueries, setMaxExpandedQueries] = useState(
+    REAL_STRESS_SCENARIOS.recursive.maxExpandedQueries,
+  );
+  const [maxContextTokens, setMaxContextTokens] = useState(100000);
   const [events, setEvents] = useState([]);
   const [citations, setCitations] = useState([]);
   const [summary, setSummary] = useState(null);
+  const [error, setError] = useState(null);
   const [isRunning, setIsRunning] = useState(false);
 
-  const activeScenario = STRESS_SCENARIOS[scenarioId];
+  const activeScenario = REAL_STRESS_SCENARIOS[scenarioId];
 
   async function runScenario() {
     setIsRunning(true);
     setEvents([]);
     setCitations([]);
     setSummary(null);
+    setError(null);
 
-    const dataset = createScenarioDataset(scenarioId);
-    const searchStats = {
-      totalStrongMatches: 0,
-      estimatedTokens: 0,
-    };
-    const loop = buildLoop(dataset, searchStats);
-    const stream = loop.stream(query, { minScore: activeScenario.minScore });
-    let final;
+    try {
+      const response = await fetch("/api/run", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          scenarioId,
+          query,
+          minScore: mode === "minScore" ? Number(minScore) : undefined,
+          topK: mode === "topK" ? Number(topK) : undefined,
+          maxIterations: Number(maxIterations),
+          maxExpandedQueries: Number(maxExpandedQueries),
+          maxContextTokens: Number(maxContextTokens),
+        }),
+      });
 
-    while (true) {
-      const next = await stream.next();
-      if (next.done) {
-        final = next.value;
-        break;
+      if (!response.ok || !response.body) {
+        throw new Error(`Request failed (${response.status})`);
       }
 
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), {
+          stream: !done,
+        });
+
+        let newlineIndex = buffer.indexOf("\n");
+        while (newlineIndex >= 0) {
+          const line = buffer.slice(0, newlineIndex).trim();
+          buffer = buffer.slice(newlineIndex + 1);
+          if (line) {
+            const payload = JSON.parse(line);
+            if (payload.type === "event") {
+              startTransition(() => {
+                setEvents((current) => [...current, payload.event]);
+              });
+            } else if (payload.type === "result") {
+              startTransition(() => {
+                setCitations(payload.result.chunks);
+                setSummary({
+                  totalConsidered: payload.result.totalChunksConsidered,
+                  totalMatched: payload.result.totalChunksMatched,
+                  recursionDepth: payload.result.recursionDepth,
+                  shardCount: payload.result.shardCount,
+                  iterationsRun: payload.result.iterations.length,
+                  estimatedTokens: payload.searchStats.maxEstimatedTokens,
+                  embeddedDocuments: payload.stats.embeddedDocuments,
+                  virtualDocuments: payload.stats.virtualDocuments,
+                  strongMatches: payload.searchStats.maxStrongMatches,
+                  baseMatches: payload.searchStats.maxBaseMatches,
+                  modelId: payload.runtime.modelId,
+                  rerankModelId: payload.runtime.rerankModelId,
+                  embeddingModelId: payload.runtime.embeddingModelId,
+                  mode: payload.runtime.topKUsed == null ? "minScore" : "topK",
+                  minScoreUsed: payload.runtime.minScoreUsed,
+                  topKUsed: payload.runtime.topKUsed,
+                });
+              });
+            } else if (payload.type === "error") {
+              throw new Error(payload.message);
+            }
+          }
+          newlineIndex = buffer.indexOf("\n");
+        }
+
+        if (done) {
+          break;
+        }
+      }
+    } catch (runError) {
       startTransition(() => {
-        setEvents((current) => [...current, next.value]);
+        setError(runError instanceof Error ? runError.message : "Unknown error");
+      });
+    } finally {
+      startTransition(() => {
+        setIsRunning(false);
       });
     }
-
-    startTransition(() => {
-      setCitations(final.chunks.slice(0, 12));
-      setSummary({
-        totalConsidered: final.totalChunksConsidered,
-        totalMatched: final.totalChunksMatched,
-        recursionDepth: final.recursionDepth,
-        shardCount: final.shardCount,
-        estimatedTokens: searchStats.estimatedTokens,
-        documents: dataset.chunks.length,
-      });
-      setIsRunning(false);
-    });
   }
 
   return (
     <main className="shell">
       <section className="hero">
         <p className="eyebrow">alphaloop recursive stress lab</p>
-        <h1>Force recursive branching on a synthetic embedded corpus.</h1>
+        <h1>Run a real server-side alphaloop search against a real embedded corpus.</h1>
         <p className="lede">
-          This demo uses only the stock <code>SearchProgress</code> and{" "}
-          <code>Citations</code> components, backed by an in-memory vector
-          search and a deterministic local model.
+          This demo uses the stock <code>SearchProgress</code> and{" "}
+          <code>Citations</code> components only. The UI calls a Cloudflare
+          Worker that runs alphaloop with live OpenAI embeddings and live OpenAI
+          model calls.
         </p>
       </section>
 
       <section className="controls">
         <div className="scenarioGrid">
-          {scenarioEntries.map((scenario) => (
+          {REAL_SCENARIO_LIST.map((scenario) => (
             <button
               key={scenario.id}
               className={scenario.id === scenarioId ? "scenario active" : "scenario"}
               onClick={() => {
                 setScenarioId(scenario.id);
                 setQuery(scenario.query);
+                setMinScore(scenario.minScore);
+                setMaxIterations(scenario.maxIterations);
+                setMaxExpandedQueries(scenario.maxExpandedQueries);
               }}
             >
               <span>{scenario.label}</span>
-              <strong>{scenario.documents.toLocaleString()} docs</strong>
+              <strong>
+                x{scenario.replicaCount} replicas · x{scenario.textMultiplier} text
+              </strong>
             </button>
           ))}
         </div>
@@ -130,19 +159,104 @@ export default function App() {
           />
         </label>
 
+        <div className="runtimeGrid">
+          <label className="field">
+            <span>Retrieval mode</span>
+            <select value={mode} onChange={(event) => setMode(event.target.value)}>
+              <option value="minScore">Comprehensive minScore</option>
+              <option value="topK">Focused topK</option>
+            </select>
+          </label>
+
+          <label className="field">
+            <span>minScore</span>
+            <input
+              type="number"
+              step="0.01"
+              value={minScore}
+              disabled={mode !== "minScore"}
+              onChange={(event) => setMinScore(event.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>topK</span>
+            <input
+              type="number"
+              step="1"
+              value={topK}
+              disabled={mode !== "topK"}
+              onChange={(event) => setTopK(event.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>Max iterations</span>
+            <input
+              type="number"
+              step="1"
+              value={maxIterations}
+              onChange={(event) => setMaxIterations(event.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>Expanded queries</span>
+            <input
+              type="number"
+              step="1"
+              value={maxExpandedQueries}
+              onChange={(event) => setMaxExpandedQueries(event.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>Max context tokens</span>
+            <input
+              type="number"
+              step="1000"
+              value={maxContextTokens}
+              onChange={(event) => setMaxContextTokens(event.target.value)}
+            />
+          </label>
+        </div>
+
         <button className="launch" onClick={runScenario} disabled={isRunning}>
           {isRunning ? "Running recursive search..." : "Run recursive search"}
         </button>
       </section>
 
+      {error ? (
+        <section className="panel">
+          <div className="panelHeader">
+            <h2>Run error</h2>
+            <span>Server response</span>
+          </div>
+          <p className="errorText">{error}</p>
+        </section>
+      ) : null}
+
       {summary ? (
         <section className="telemetry">
-          <Metric label="Strong matches" value={summary.totalMatched.toLocaleString()} />
+          <Metric label="Matched chunks" value={summary.totalMatched.toLocaleString()} />
           <Metric label="Unique chunks" value={summary.totalConsidered.toLocaleString()} />
+          <Metric label="Largest corpus" value={summary.strongMatches.toLocaleString()} />
+          <Metric label="Largest base set" value={summary.baseMatches.toLocaleString()} />
           <Metric label="Estimated tokens" value={summary.estimatedTokens.toLocaleString()} />
           <Metric label="Shards" value={summary.shardCount.toLocaleString()} />
           <Metric label="Recursion depth" value={summary.recursionDepth.toLocaleString()} />
-          <Metric label="Corpus docs" value={summary.documents.toLocaleString()} />
+          <Metric label="Loop rounds" value={summary.iterationsRun.toLocaleString()} />
+          <Metric label="Embedded docs" value={summary.embeddedDocuments.toLocaleString()} />
+          <Metric label="Virtual docs" value={summary.virtualDocuments.toLocaleString()} />
+          <Metric
+            label="Retrieval"
+            value={
+              summary.mode === "topK"
+                ? `topK ${summary.topKUsed}`
+                : `minScore ${summary.minScoreUsed}`
+            }
+          />
+          <Metric label="Model" value={summary.modelId} />
         </section>
       ) : null}
 

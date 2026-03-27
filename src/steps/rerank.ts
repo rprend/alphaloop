@@ -14,7 +14,7 @@ const RerankResponseSchema = z.object({
     z.object({
       id: z.string(),
       relevance: z.number().min(0).max(1),
-      rationale: z.string().optional(),
+      rationale: z.string().nullable(),
     }),
   ),
 });
@@ -76,7 +76,7 @@ ${passageList}`,
         return {
           ...original,
           relevance: r.relevance,
-          rationale: r.rationale,
+          rationale: r.rationale ?? undefined,
           sourceQuery: options?.sourceQuery,
           iteration: options?.iteration,
         } satisfies RankedChunk;

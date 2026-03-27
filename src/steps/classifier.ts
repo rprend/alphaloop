@@ -12,7 +12,7 @@ import type { EmbeddingChunk, LoopContext, RankedChunk } from "../types.js";
 const ClassifyResponseSchema = z.object({
   relevant: z.boolean(),
   confidence: z.number().min(0).max(1),
-  rationale: z.string().optional(),
+  rationale: z.string().nullable(),
 });
 
 /**
@@ -82,7 +82,7 @@ Is this passage relevant to the concept above?`,
       const ranked: RankedChunk = {
         ...result.chunk,
         relevance: result.confidence * 0.8,
-        rationale: result.rationale,
+        rationale: result.rationale ?? undefined,
         sourceQuery: "classifier",
       };
       ctx.rankedChunks.set(ranked.id, ranked);
