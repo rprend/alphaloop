@@ -4,7 +4,7 @@ import { createAlphaloop } from "../../dist/index.js";
 import { createSyntheticLanguageModel } from "../shared/fakeModel.mjs";
 import { createScenarioDataset, searchScenario } from "../shared/stressData.mjs";
 
-const SCENARIOS = ["branch2", "branch8", "branch36"];
+const SCENARIOS = ["branch2", "branch8", "branch36", "branch360"];
 
 function formatNumber(value) {
   return value.toLocaleString();
@@ -59,7 +59,7 @@ async function runScenario(scenarioId) {
   }
 
   console.log(`\nScenario: ${dataset.scenario.label}`);
-  console.log(`Documents: ${formatNumber(dataset.chunks.length)}`);
+  console.log(`Documents: ${formatNumber(dataset.documentCount ?? dataset.chunks.length)}`);
   console.log(`Strong matches: ${formatNumber(searchStats.totalStrongMatches)}`);
   console.log(`Estimated tokens returned by vector search: ${formatNumber(searchStats.estimatedTokens)}`);
   console.log(`Recursive shard count: ${formatNumber(final.shardCount)}`);
@@ -74,13 +74,30 @@ async function runScenario(scenarioId) {
   if (final.shardCount <= 1) {
     throw new Error(`Scenario ${scenarioId} did not trigger recursive sharding.`);
   }
+
+  return {
+    scenarioId,
+    shardCount: final.shardCount,
+    estimatedTokens: searchStats.estimatedTokens,
+  };
 }
 
 await build(viteConfig);
 console.log("Built demo app.");
 
+let previous;
 for (const scenarioId of SCENARIOS) {
-  await runScenario(scenarioId);
+  const current = await runScenario(scenarioId);
+  if (scenarioId === "branch360" && previous) {
+    const ratio = current.shardCount / previous.shardCount;
+    console.log(`Shard scale vs previous largest case: ${ratio.toFixed(2)}x`);
+    if (ratio < 9) {
+      throw new Error(
+        `Expected ~10x more parallelism than ${previous.scenarioId}, got only ${ratio.toFixed(2)}x.`,
+      );
+    }
+  }
+  previous = current;
 }
 
 console.log("\nRecursive stress test completed successfully.");

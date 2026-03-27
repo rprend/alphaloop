@@ -112,12 +112,33 @@ export const STRESS_SCENARIOS = {
     query: "atlas recursion ledger",
     minScore: 0.55,
   },
+  branch360: {
+    id: "branch360",
+    label: "Tens of millions",
+    documents: 18000,
+    paragraphsPerDoc: 9,
+    wordsPerParagraph: 240,
+    query: "atlas recursion ledger",
+    minScore: 0.55,
+    virtual: true,
+  },
 };
 
 export function createScenarioDataset(scenarioId) {
   const scenario = STRESS_SCENARIOS[scenarioId];
   if (!scenario) {
     throw new Error(`Unknown scenario: ${scenarioId}`);
+  }
+
+  if (scenario.virtual) {
+    const sampleText = createChunkText(scenario, 0);
+    return {
+      scenario,
+      chunks: [],
+      documentCount: scenario.documents,
+      estimatedTokens: Math.ceil(sampleText.length / 4) * scenario.documents,
+      sampleTokensPerChunk: Math.ceil(sampleText.length / 4),
+    };
   }
 
   const rng = mulberry32(scenario.documents * scenario.wordsPerParagraph);
@@ -153,7 +174,10 @@ export function createScenarioDataset(scenarioId) {
   return {
     scenario,
     chunks,
+    documentCount: chunks.length,
     estimatedTokens,
+    sampleTokensPerChunk:
+      chunks.length > 0 ? Math.ceil(chunks[0].text.length / 4) : 0,
   };
 }
 
@@ -162,6 +186,10 @@ export async function searchScenario(
   query,
   { minScore, topK, cursor },
 ) {
+  if (dataset.scenario.virtual) {
+    return searchVirtualScenario(dataset, query, { minScore, topK, cursor });
+  }
+
   const queryEmbedding = embed(query);
   const ranked = dataset.chunks
     .map((chunk) => ({
@@ -186,5 +214,81 @@ export async function searchScenario(
       (total, chunk) => total + Math.ceil(chunk.text.length / 4),
       0,
     ),
+  };
+}
+
+function createChunkText(scenario, docIndex) {
+  const theme = THEMES[docIndex % THEMES.length];
+  const rng = mulberry32(
+    scenario.documents * scenario.wordsPerParagraph + docIndex * 17,
+  );
+  const paragraphs = [];
+
+  for (let p = 0; p < scenario.paragraphsPerDoc; p++) {
+    paragraphs.push(buildParagraph(theme, docIndex, scenario.wordsPerParagraph, rng));
+  }
+
+  return `Document ${docIndex} | Theme ${theme}\n${paragraphs.join("\n\n")}`;
+}
+
+function createVirtualChunk(scenario, docIndex, score) {
+  const theme = THEMES[docIndex % THEMES.length];
+  return {
+    id: `doc-${scenario.id}-${docIndex}`,
+    text: createChunkText(scenario, docIndex),
+    score,
+    metadata: {
+      docIndex,
+      theme,
+      scenario: scenario.id,
+      virtual: true,
+    },
+  };
+}
+
+function virtualScoreForDoc(docIndex) {
+  switch (docIndex % THEMES.length) {
+    case 0:
+      return 0.99;
+    case 1:
+      return 0.78;
+    case 2:
+      return 0.61;
+    default:
+      return 0.42;
+  }
+}
+
+function searchVirtualScenario(
+  dataset,
+  _query,
+  { minScore, topK, cursor },
+) {
+  const matchingDocIndexes = [];
+
+  for (let docIndex = 0; docIndex < dataset.scenario.documents; docIndex++) {
+    const score = virtualScoreForDoc(docIndex);
+    if (minScore != null && score < minScore) {
+      continue;
+    }
+    matchingDocIndexes.push(docIndex);
+  }
+
+  const cappedIndexes =
+    topK == null ? matchingDocIndexes : matchingDocIndexes.slice(0, topK);
+  const start = cursor ? Number(cursor) : 0;
+  const pageSize = 120;
+  const pageIndexes = cappedIndexes.slice(start, start + pageSize);
+  const page = pageIndexes.map((docIndex) =>
+    createVirtualChunk(dataset.scenario, docIndex, virtualScoreForDoc(docIndex)),
+  );
+  const nextCursor =
+    start + pageSize < cappedIndexes.length ? String(start + pageSize) : undefined;
+
+  return {
+    chunks: page,
+    nextCursor,
+    totalStrongMatches: cappedIndexes.length,
+    estimatedTokens: cappedIndexes.length * dataset.sampleTokensPerChunk,
   };
 }
