@@ -26,6 +26,10 @@ export async function iterativeSearch(
       .slice(0, Math.max(10, ctx.rankedChunks.size));
 
     if (topChunks.length === 0) break;
+    ctx.emit({
+      type: "phase",
+      label: `Summarizing ${topChunks.length} ranked chunks for iteration ${iteration}`,
+    });
 
     const passageSummaries = await reduceChunksToSummary(
       `ranked evidence iteration ${iteration}`,

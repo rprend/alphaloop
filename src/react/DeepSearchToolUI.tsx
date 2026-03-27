@@ -4,6 +4,7 @@ import { useState, type FC } from "react";
 
 export interface SearchProgressEvent {
   type: string;
+  label?: string;
   query?: string;
   chunksFound?: number;
   queries?: string[];
@@ -26,6 +27,8 @@ export interface SearchChunk {
 
 function progressLabel(event: SearchProgressEvent): string {
   switch (event.type) {
+    case "phase":
+      return event.label ?? "Working...";
     case "embedding_search":
       return `Searching for "${event.query}"`;
     case "query_expansion": {

@@ -33,6 +33,10 @@ export async function rerank(
   const model = ctx.config.rerankModel ?? ctx.config.model;
   const systemPrompt = ctx.config.rerankPrompt ?? RERANK_PROMPT;
   ctx.recursionDepth = Math.max(ctx.recursionDepth, depth);
+  ctx.emit({
+    type: "phase",
+    label: `Preparing ${chunks.length} chunks for re-ranking`,
+  });
 
   const allRanked: RankedChunk[] = [];
   const prepared = await Promise.all(

@@ -136,6 +136,10 @@ export interface AlphaloopResult {
 /** Stream events emitted during loop execution. */
 export type AlphaloopStreamEvent =
   | {
+      type: "phase";
+      label: string;
+    }
+  | {
       type: "embedding_search";
       query: string;
       chunksFound: number;

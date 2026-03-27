@@ -19,6 +19,12 @@ export async function queryExpansion(
     ctx.config.queryExpansionPrompt ?? QUERY_EXPANSION_PROMPT
   ).replace("{count}", String(count));
 
+  if (initialChunks.length > 0) {
+    ctx.emit({
+      type: "phase",
+      label: `Condensing ${initialChunks.length} strong matches for query expansion`,
+    });
+  }
   const contextSummary =
     initialChunks.length > 0
       ? await reduceChunksToSummary(
