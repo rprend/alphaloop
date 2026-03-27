@@ -63,15 +63,21 @@ export function createAlphaloopHandler(config: AlphaloopHandlerConfig) {
                   .number()
                   .optional()
                   .describe("Minimum vector score a chunk must meet to be considered a strong match"),
+                topK: z
+                  .number()
+                  .int()
+                  .positive()
+                  .optional()
+                  .describe("Limit retrieval to the first K strong matches"),
                 maxContextTokens: z
                   .number()
                   .optional()
                   .describe("Maximum context tokens for any single LLM call"),
               }),
-              execute: async ({ query, maxResults, minScore, maxContextTokens }) => {
+              execute: async ({ query, maxResults, minScore, topK, maxContextTokens }) => {
                 const ctx = createStreamingLoopContext(
                   config,
-                  { minScore, maxContextTokens },
+                  { minScore, topK, maxContextTokens },
                   (event) => {
                     writer.write({
                       type: "data-search-progress" as any,
@@ -104,6 +110,7 @@ export function createAlphaloopHandler(config: AlphaloopHandlerConfig) {
                   totalMatched: ctx.totalChunksMatched,
                   iterationsRun: ctx.iterations.length,
                   minScoreUsed: ctx.config.minScore,
+                  topKUsed: ctx.config.topK,
                   shardCount: ctx.shardCount,
                   recursionDepth: ctx.recursionDepth,
                 };
@@ -132,6 +139,7 @@ function createStreamingLoopContext(
     config: {
       ...config,
       minScore: options.minScore ?? config.minScore ?? DEFAULTS.minScore,
+      topK: options.topK ?? config.topK,
       maxExpandedQueries:
         config.maxExpandedQueries ?? DEFAULTS.maxExpandedQueries,
       maxIterations: config.maxIterations ?? DEFAULTS.maxIterations,

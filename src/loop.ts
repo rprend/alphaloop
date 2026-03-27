@@ -22,6 +22,7 @@ function createLoopContext(
     config: {
       ...config,
       minScore: options.minScore ?? config.minScore ?? DEFAULTS.minScore,
+      topK: options.topK ?? config.topK,
       maxExpandedQueries:
         config.maxExpandedQueries ?? DEFAULTS.maxExpandedQueries,
       maxIterations: config.maxIterations ?? DEFAULTS.maxIterations,
@@ -85,6 +86,7 @@ async function run(
     iterations: ctx.iterations.length,
     totalChunksMatched: ctx.totalChunksMatched,
     minScore: ctx.config.minScore,
+    topK: ctx.config.topK,
     shardCount: ctx.shardCount,
     recursionDepth: ctx.recursionDepth,
   });
@@ -95,6 +97,7 @@ async function run(
     totalChunksConsidered: ctx.seenChunks.size,
     totalChunksMatched: ctx.totalChunksMatched,
     minScoreUsed: ctx.config.minScore,
+    topKUsed: ctx.config.topK,
     recursionDepth: ctx.recursionDepth,
     shardCount: ctx.shardCount,
   };

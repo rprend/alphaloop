@@ -33,6 +33,7 @@ export async function embeddingSearch(
     chunksMatched: matched,
     pagesFetched: requests,
     minScore: ctx.config.minScore,
+    topK: ctx.config.topK,
   });
 
   return results;

@@ -20,13 +20,18 @@ export interface SearchPage {
 /** Paged search contract for vector stores. */
 export type EmbeddingSearchFn = (
   query: string,
-  options: { minScore: number; cursor?: string; signal?: AbortSignal },
+  options: {
+    minScore?: number;
+    topK?: number;
+    cursor?: string;
+    signal?: AbortSignal;
+  },
 ) => Promise<SearchPage>;
 
 /** Streaming search contract for vector stores. */
 export type EmbeddingSearchStreamFn = (
   query: string,
-  options: { minScore: number; signal?: AbortSignal },
+  options: { minScore?: number; topK?: number; signal?: AbortSignal },
 ) => AsyncIterable<EmbeddingChunk>;
 
 /** Configuration for the agentic retrieval loop. */
@@ -45,6 +50,8 @@ export type AlphaloopConfig =
 export interface AlphaloopSharedConfig {
   /** Minimum vector similarity score for a chunk to be treated as a strong match. */
   minScore?: number;
+  /** Optional default topK override. When set, retrieval stops after K strong matches. */
+  topK?: number;
 
   /** AI SDK LanguageModel for query expansion, re-ranking, and synthesis. */
   model: LanguageModel;
@@ -82,6 +89,7 @@ export interface AlphaloopSharedConfig {
 
 export interface AlphaloopRunOptions {
   minScore?: number;
+  topK?: number;
   maxContextTokens?: number;
 }
 
@@ -117,6 +125,8 @@ export interface AlphaloopResult {
   totalChunksMatched: number;
   /** Runtime minScore used for this run. */
   minScoreUsed: number;
+  /** Runtime topK used for this run, if any. */
+  topKUsed?: number;
   /** Deepest recursive shard depth reached. */
   recursionDepth: number;
   /** Total shards processed across recursive LLM steps. */
@@ -132,6 +142,7 @@ export type AlphaloopStreamEvent =
       chunksMatched: number;
       pagesFetched: number;
       minScore: number;
+      topK?: number;
     }
   | {
       type: "query_expansion";
@@ -173,6 +184,7 @@ export type AlphaloopStreamEvent =
       iterations: number;
       totalChunksMatched: number;
       minScore: number;
+      topK?: number;
       shardCount: number;
       recursionDepth: number;
     }
@@ -183,6 +195,7 @@ export type AlphaloopStreamEvent =
 
 export interface ResolvedLoopConfig extends AlphaloopSharedConfig {
   minScore: number;
+  topK?: number;
   maxExpandedQueries: number;
   maxIterations: number;
   relevanceThreshold: number;

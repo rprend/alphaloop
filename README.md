@@ -21,10 +21,12 @@ import { openai } from "@ai-sdk/openai";
 const handler = createAlphaloopHandler({
   model: openai("gpt-4o"),
   minScore: 0.75,
-  search: async (query, { minScore, cursor }) => {
-    // Page until your DB is exhausted or scores fall below minScore
+  search: async (query, { minScore, topK, cursor }) => {
+    // Default mode is comprehensive over minScore.
+    // If topK is passed at runtime, stop after the first K strong matches.
     const page = await myVectorDB.search(query, {
       minScore,
+      topK,
       cursor,
     });
     return {
@@ -72,7 +74,7 @@ Alphaloop runs a 4-step retrieval loop over your embeddings:
 
 ### 1. Embedding Search (recall baseline)
 
-Calls your `search` function with the original query and fetches all chunks whose vector score is `>= minScore`.
+Calls your `search` function with the original query. By default it fetches all chunks whose vector score is `>= minScore`. At runtime you can override that and request `topK` strong matches instead.
 
 ### 2. Query Expansion
 
@@ -106,6 +108,7 @@ createAlphaloopHandler({
 
   // Optional
   minScore: 0.75,                // Strong-match threshold (default: 0)
+  topK: 100,                     // Optional default topK override
   rerankModel: openai("gpt-4o-mini"), // Cheaper model for re-ranking
   maxExpandedQueries: 8,         // Query variants per round (default: 8)
   maxIterations: 3,              // Refinement rounds (default: 3)
@@ -120,17 +123,22 @@ createAlphaloopHandler({
 
 ## Search Function
 
-Your search function takes a string query and returns all strong matches above `minScore`. Alphaloop handles recursive sharding after retrieval; your vector store handles paging or streaming.
+Your search function takes a string query and returns strong matches. Alphaloop defaults to comprehensive retrieval over `minScore`, but callers can override that at runtime with either a different `minScore` or a `topK`.
 
 ```ts
 type EmbeddingSearchFn = (
   query: string,
-  options: { minScore: number; cursor?: string; signal?: AbortSignal },
+  options: {
+    minScore?: number;
+    topK?: number;
+    cursor?: string;
+    signal?: AbortSignal;
+  },
 ) => Promise<{ chunks: EmbeddingChunk[]; nextCursor?: string }>;
 
 type EmbeddingSearchStreamFn = (
   query: string,
-  options: { minScore: number; signal?: AbortSignal },
+  options: { minScore?: number; topK?: number; signal?: AbortSignal },
 ) => AsyncIterable<EmbeddingChunk>;
 
 interface EmbeddingChunk {
@@ -184,10 +192,15 @@ const loop = createAlphaloop({
   minScore: 0.75,
 });
 
-// Run the full loop with runtime overrides
+// Run in comprehensive threshold mode
 const result = await loop.run("What is consciousness?", {
   minScore: 0.8,
   maxContextTokens: 100_000,
+});
+
+// Or switch this run to topK mode
+const focused = await loop.run("What is consciousness?", {
+  topK: 50,
 });
 console.log(result.chunks);     // Ranked results
 console.log(result.iterations); // Loop telemetry

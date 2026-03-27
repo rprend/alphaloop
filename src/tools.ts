@@ -27,7 +27,7 @@ function createLoopContext(
         progress.push(`Searching embeddings for "${event.query}"`);
         logLines.push({
           key: "Initial search",
-          value: `Found ${event.chunksFound} new of ${event.chunksMatched} matched`,
+          value: `Found ${event.chunksFound} new of ${event.chunksMatched} matched${event.topK ? ` (topK ${event.topK})` : ""}`,
         });
         break;
       case "query_expansion":
@@ -89,6 +89,7 @@ function createLoopContext(
     config: {
       ...config,
       minScore: options.minScore ?? config.minScore ?? DEFAULTS.minScore,
+      topK: options.topK ?? config.topK,
       maxExpandedQueries:
         config.maxExpandedQueries ?? DEFAULTS.maxExpandedQueries,
       maxIterations: config.maxIterations ?? DEFAULTS.maxIterations,
@@ -132,14 +133,21 @@ export function alphaloopTools(config: AlphaloopConfig) {
           .number()
           .optional()
           .describe("Minimum vector score a chunk must meet to be considered a strong match"),
+        topK: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Limit retrieval to the first K strong matches"),
         maxContextTokens: z
           .number()
           .optional()
           .describe("Maximum context tokens for any single LLM call"),
       }),
-      execute: async ({ query, maxResults, minScore, maxContextTokens }) => {
+      execute: async ({ query, maxResults, minScore, topK, maxContextTokens }) => {
         const { ctx, progress, logLines } = createLoopContext(config, {
           minScore,
+          topK,
           maxContextTokens,
         });
 
@@ -176,6 +184,7 @@ export function alphaloopTools(config: AlphaloopConfig) {
           totalMatched: ctx.totalChunksMatched,
           iterationsRun: ctx.iterations.length,
           minScoreUsed: ctx.config.minScore,
+          topKUsed: ctx.config.topK,
           shardCount: ctx.shardCount,
           recursionDepth: ctx.recursionDepth,
           __progress: progress,
