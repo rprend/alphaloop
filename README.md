@@ -211,6 +211,18 @@ const tools = loop.tools();
 // tools.deep_search — use with streamText()
 ```
 
+## Demo Stress Lab
+
+This repo includes a local demo site and deterministic recursion stress harness:
+
+```bash
+npm run demo         # start the website at http://127.0.0.1:4173
+npm run demo:build   # build the website
+npm run demo:stress  # rebuild alphaloop, build the demo, run branching stress cases
+```
+
+The demo generates an in-memory embedded corpus and exercises the stock `SearchProgress` and `Citations` components against a small branch case, a wider branch case, and a multi-million-token retrieval case.
+
 ## Streaming Progress
 
 The handler streams progress events during tool execution using the AI SDK's `createUIMessageStream`. Register the `dataPartSchemas` in your `useChat` call to receive them:
