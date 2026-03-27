@@ -6,3 +6,4 @@ dist/
 .claude/
 *.tsbuildinfo
 .gstack/
+demo/data/

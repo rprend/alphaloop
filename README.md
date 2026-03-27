@@ -223,14 +223,14 @@ npm run demo:dataset # generate the real embedded dataset asset
 npm run demo:real-stress -- recursive  # run the real OpenAI-backed stress runner
 ```
 
-The demo generates an in-memory embedded corpus and exercises the stock `SearchProgress` and `Citations` components against a small branch case, a wider branch case, and a multi-million-token retrieval case.
+The demo generates a real embedded corpus of Alpha Book-like chunks, then exercises the stock `SearchProgress` and `Citations` components against progressively larger virtual retrieval sets.
 
 There is also a Worker-backed real test harness in `demo/worker.mjs`. It serves the
 same UI components, but executes `alphaloop` server-side with live OpenAI query
 embeddings and live OpenAI model calls. The real stress scenarios use a generated
-embedded corpus and deterministically inflate the returned chunk bodies so the
-recursive 100k context sharding path can be exercised at much larger effective
-corpus sizes without relying on a fake browser-side LLM.
+embedded corpus of roughly uniform ~1400-character chunks, then scale retrieval by
+virtual chunk count so the recursive 100k context sharding path can be exercised
+with millions of chunk-sized passages instead of oversized synthetic documents.
 
 ## Streaming Progress
 

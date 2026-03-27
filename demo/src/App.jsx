@@ -51,59 +51,33 @@ export default function App() {
         throw new Error(`Request failed (${response.status})`);
       }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { value, done } = await reader.read();
-        buffer += decoder.decode(value || new Uint8Array(), {
-          stream: !done,
-        });
-
-        let newlineIndex = buffer.indexOf("\n");
-        while (newlineIndex >= 0) {
-          const line = buffer.slice(0, newlineIndex).trim();
-          buffer = buffer.slice(newlineIndex + 1);
-          if (line) {
-            const payload = JSON.parse(line);
-            if (payload.type === "event") {
-              startTransition(() => {
-                setEvents((current) => [...current, payload.event]);
-              });
-            } else if (payload.type === "result") {
-              startTransition(() => {
-                setCitations(payload.result.chunks);
-                setSummary({
-                  totalConsidered: payload.result.totalChunksConsidered,
-                  totalMatched: payload.result.totalChunksMatched,
-                  recursionDepth: payload.result.recursionDepth,
-                  shardCount: payload.result.shardCount,
-                  iterationsRun: payload.result.iterations.length,
-                  estimatedTokens: payload.searchStats.maxEstimatedTokens,
-                  embeddedDocuments: payload.stats.embeddedDocuments,
-                  virtualDocuments: payload.stats.virtualDocuments,
-                  strongMatches: payload.searchStats.maxStrongMatches,
-                  baseMatches: payload.searchStats.maxBaseMatches,
-                  modelId: payload.runtime.modelId,
-                  rerankModelId: payload.runtime.rerankModelId,
-                  embeddingModelId: payload.runtime.embeddingModelId,
-                  mode: payload.runtime.topKUsed == null ? "minScore" : "topK",
-                  minScoreUsed: payload.runtime.minScoreUsed,
-                  topKUsed: payload.runtime.topKUsed,
-                });
-              });
-            } else if (payload.type === "error") {
-              throw new Error(payload.message);
-            }
-          }
-          newlineIndex = buffer.indexOf("\n");
-        }
-
-        if (done) {
-          break;
-        }
+      const payload = await response.json();
+      if (payload.error) {
+        throw new Error(payload.error);
       }
+
+      startTransition(() => {
+        setEvents(payload.events || []);
+        setCitations(payload.result.chunks);
+        setSummary({
+          totalConsidered: payload.result.totalChunksConsidered,
+          totalMatched: payload.result.totalChunksMatched,
+          recursionDepth: payload.result.recursionDepth,
+          shardCount: payload.result.shardCount,
+          iterationsRun: payload.result.iterations.length,
+          estimatedTokens: payload.searchStats.maxEstimatedTokens,
+          embeddedChunks: payload.stats.embeddedChunks,
+          virtualChunks: payload.stats.virtualChunks,
+          strongMatches: payload.searchStats.maxStrongMatches,
+          baseMatches: payload.searchStats.maxBaseMatches,
+          modelId: payload.runtime.modelId,
+          rerankModelId: payload.runtime.rerankModelId,
+          embeddingModelId: payload.runtime.embeddingModelId,
+          mode: payload.runtime.topKUsed == null ? "minScore" : "topK",
+          minScoreUsed: payload.runtime.minScoreUsed,
+          topKUsed: payload.runtime.topKUsed,
+        });
+      });
     } catch (runError) {
       startTransition(() => {
         setError(runError instanceof Error ? runError.message : "Unknown error");
@@ -144,7 +118,7 @@ export default function App() {
             >
               <span>{scenario.label}</span>
               <strong>
-                x{scenario.replicaCount} replicas · x{scenario.textMultiplier} text
+                x{scenario.replicaCount.toLocaleString()} virtual replicas
               </strong>
             </button>
           ))}
@@ -246,8 +220,8 @@ export default function App() {
           <Metric label="Shards" value={summary.shardCount.toLocaleString()} />
           <Metric label="Recursion depth" value={summary.recursionDepth.toLocaleString()} />
           <Metric label="Loop rounds" value={summary.iterationsRun.toLocaleString()} />
-          <Metric label="Embedded docs" value={summary.embeddedDocuments.toLocaleString()} />
-          <Metric label="Virtual docs" value={summary.virtualDocuments.toLocaleString()} />
+          <Metric label="Embedded chunks" value={summary.embeddedChunks.toLocaleString()} />
+          <Metric label="Virtual chunks" value={summary.virtualChunks.toLocaleString()} />
           <Metric
             label="Retrieval"
             value={

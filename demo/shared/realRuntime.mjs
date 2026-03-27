@@ -5,10 +5,13 @@ import { REAL_STRESS_SCENARIOS } from "./realStressScenarios.mjs";
 
 export async function runRealStressScenario({
   dataset,
+  search,
+  embeddedChunkCount,
   apiKey,
   modelId,
   rerankModelId,
   embeddingModelId,
+  embeddingDimensions,
   query,
   scenarioId,
   minScore,
@@ -32,11 +35,35 @@ export async function runRealStressScenario({
     maxStrongMatches: 0,
     maxBaseMatches: 0,
   };
-  const search = createRealSearch({
-    dataset,
-    scenario,
-    embeddingModel: openai.embedding(resolvedEmbeddingModelId),
-    onSearchStats(page) {
+  const recordSearchStats = (page) => {
+    searchStats.maxEstimatedTokens = Math.max(
+      searchStats.maxEstimatedTokens,
+      page.estimatedTokens,
+    );
+    searchStats.maxStrongMatches = Math.max(
+      searchStats.maxStrongMatches,
+      page.totalStrongMatches,
+    );
+    searchStats.maxBaseMatches = Math.max(
+      searchStats.maxBaseMatches,
+      page.totalBaseMatches,
+    );
+  };
+
+  let resolvedSearch =
+    search ||
+    createRealSearch({
+      dataset,
+      scenario,
+      embeddingModel: openai.embedding(resolvedEmbeddingModelId),
+      embeddingDimensions,
+      onSearchStats: recordSearchStats,
+    });
+
+  if (search) {
+    const baseSearch = search;
+    resolvedSearch = async (query, options) => {
+      const page = await baseSearch(query, options);
       searchStats.maxEstimatedTokens = Math.max(
         searchStats.maxEstimatedTokens,
         page.estimatedTokens,
@@ -49,13 +76,14 @@ export async function runRealStressScenario({
         searchStats.maxBaseMatches,
         page.totalBaseMatches,
       );
-    },
-  });
+      return page;
+    };
+  }
 
   const loop = createAlphaloop({
     model: openai(resolvedModelId),
     rerankModel: openai(resolvedRerankModelId),
-    search,
+    search: resolvedSearch,
     minScore: minScore ?? scenario.minScore,
     maxContextTokens,
     maxExpandedQueries: maxExpandedQueries ?? scenario.maxExpandedQueries,
@@ -82,12 +110,20 @@ export async function runRealStressScenario({
     query: query || scenario.query,
     scenario,
     result,
-    stats: getScenarioStats(dataset, scenario),
+    stats: dataset
+      ? getScenarioStats(dataset, scenario)
+      : {
+          embeddedChunks: embeddedChunkCount ?? 0,
+          virtualChunks: (embeddedChunkCount ?? 0) * scenario.replicaCount,
+          estimatedTokens: searchStats.maxEstimatedTokens,
+          replicaCount: scenario.replicaCount,
+        },
     searchStats,
     runtime: {
       modelId: resolvedModelId,
       rerankModelId: resolvedRerankModelId,
       embeddingModelId: resolvedEmbeddingModelId,
+      embeddingDimensions,
       minScoreUsed: minScore ?? scenario.minScore,
       topKUsed: topK,
       maxContextTokens,

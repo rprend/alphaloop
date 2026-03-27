@@ -2,13 +2,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { runRealStressScenario } from "../shared/realRuntime.mjs";
 import { REAL_SCENARIO_LIST } from "../shared/realStressScenarios.mjs";
+import { loadCompactRealDataset } from "../shared/realSearch.mjs";
 
 const ROOT = process.cwd();
 const ENV_PATH = path.resolve(ROOT, "../alphabook/.dev.vars");
 const DATASET_PATH = path.resolve(ROOT, "demo/public/realDataset.json");
+const EMBEDDINGS_PATH = path.resolve(ROOT, "demo/public/realEmbeddings.bin");
 
 const env = await loadEnvFile(ENV_PATH);
-const dataset = JSON.parse(await fs.readFile(DATASET_PATH, "utf8"));
+const dataset = await loadCompactRealDataset({
+  metadataPath: DATASET_PATH,
+  embeddingsPath: EMBEDDINGS_PATH,
+  fsModule: fs,
+});
 const requestedScenarioIds = new Set(process.argv.slice(2));
 const scenarios =
   requestedScenarioIds.size === 0
@@ -27,6 +33,7 @@ for (const scenario of scenarios) {
     apiKey: env.OPENAI_API_KEY,
     modelId: env.OPENAI_MODEL || "gpt-5.2",
     embeddingModelId: env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-large",
+    embeddingDimensions: Number(env.OPENAI_EMBEDDING_DIMENSIONS || 1536),
     scenarioId: scenario.id,
     query: scenario.query,
     onEvent(event) {

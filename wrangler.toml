@@ -9,3 +9,8 @@ binding = "ASSETS"
 [vars]
 OPENAI_MODEL = "gpt-5.2"
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-large"
+OPENAI_EMBEDDING_DIMENSIONS = "1536"
+
+[[vectorize]]
+binding = "CORPUS_INDEX"
+index_name = "alphaloop-recursion-lab-chunks"

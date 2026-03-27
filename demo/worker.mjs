@@ -1,6 +1,9 @@
+import { createOpenAI } from "@ai-sdk/openai";
 import { runRealStressScenario } from "./shared/realRuntime.mjs";
+import { createVectorizeSearch } from "./shared/realSearch.mjs";
+import { REAL_STRESS_SCENARIOS } from "./shared/realStressScenarios.mjs";
 
-let datasetPromise;
+let indexInfoPromise;
 
 export default {
   async fetch(request, env) {
@@ -15,93 +18,104 @@ export default {
         return new Response("OPENAI_API_KEY is not configured", { status: 500 });
       }
 
+      if (!env.CORPUS_INDEX) {
+        return new Response("CORPUS_INDEX is not configured", { status: 500 });
+      }
+
       const body = await request.json();
-      const dataset = await loadDataset(request, env);
-      const encoder = new TextEncoder();
+      const scenario = REAL_STRESS_SCENARIOS[body.scenarioId];
+      if (!scenario) {
+        return new Response("Unknown scenario", { status: 400 });
+      }
 
-      const stream = new ReadableStream({
-        async start(controller) {
-          const write = (payload) => {
-            controller.enqueue(
-              encoder.encode(`${JSON.stringify(payload)}\n`),
-            );
-          };
-
-          try {
-            const run = await runRealStressScenario({
-              dataset,
-              apiKey: env.OPENAI_API_KEY,
-              modelId: env.OPENAI_MODEL,
-              rerankModelId: env.OPENAI_RERANK_MODEL,
-              embeddingModelId: env.OPENAI_EMBEDDING_MODEL,
-              scenarioId: body.scenarioId,
-              query: body.query,
-              minScore: body.minScore,
-              topK: body.topK,
-              maxContextTokens: body.maxContextTokens,
-              maxExpandedQueries: body.maxExpandedQueries,
-              maxIterations: body.maxIterations,
-              onEvent(event) {
-                write({ type: "event", event });
-              },
-            });
-
-            write({
-              type: "result",
-              result: {
-                ...run.result,
-                chunks: run.result.chunks.slice(0, 12).map((chunk) => ({
-                  ...chunk,
-                  text:
-                    chunk.text.length > 3000
-                      ? `${chunk.text.slice(0, 3000)}...`
-                      : chunk.text,
-                })),
-              },
-              stats: run.stats,
-              searchStats: run.searchStats,
-              runtime: run.runtime,
-              scenario: run.scenario,
-              query: run.query,
-            });
-          } catch (error) {
-            write({
-              type: "error",
-              message:
-                error instanceof Error ? error.message : "Unknown worker error",
-            });
-          } finally {
-            controller.close();
-          }
-        },
+      const openai = createOpenAI({ apiKey: env.OPENAI_API_KEY });
+      const indexInfo = await loadIndexInfo(env);
+      const embeddingDimensions = Number(env.OPENAI_EMBEDDING_DIMENSIONS || 1536);
+      const search = createVectorizeSearch({
+        index: env.CORPUS_INDEX,
+        totalChunks: indexInfo.vectorCount,
+        scenario,
+        embeddingModel: openai.embedding(
+          env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-large",
+        ),
+        embeddingDimensions,
       });
-
-      return new Response(stream, {
-        headers: {
-          "content-type": "application/x-ndjson; charset=utf-8",
-          "cache-control": "no-store",
+      const events = [
+        {
+          type: "phase",
+          label: "Starting server-side search",
         },
-      });
+      ];
+
+      try {
+        const run = await runRealStressScenario({
+          search,
+          embeddedChunkCount: indexInfo.vectorCount,
+          apiKey: env.OPENAI_API_KEY,
+          modelId: env.OPENAI_MODEL,
+          rerankModelId: env.OPENAI_RERANK_MODEL,
+          embeddingModelId: env.OPENAI_EMBEDDING_MODEL,
+          embeddingDimensions,
+          scenarioId: body.scenarioId,
+          query: body.query,
+          minScore: body.minScore,
+          topK: body.topK,
+          maxContextTokens: body.maxContextTokens,
+          maxExpandedQueries: body.maxExpandedQueries,
+          maxIterations: body.maxIterations,
+          onEvent(event) {
+            events.push(event);
+          },
+        });
+
+        return Response.json({
+          events,
+          result: {
+            ...run.result,
+            chunks: run.result.chunks.slice(0, 12).map((chunk) => ({
+              ...chunk,
+              text:
+                chunk.text.length > 3000
+                  ? `${chunk.text.slice(0, 3000)}...`
+                  : chunk.text,
+            })),
+          },
+          stats: run.stats,
+          searchStats: run.searchStats,
+          runtime: run.runtime,
+          scenario: run.scenario,
+          query: run.query,
+        }, {
+          headers: {
+            "cache-control": "no-store",
+          },
+        });
+      } catch (error) {
+        console.error("alphaloop worker error", error);
+        return Response.json({
+          error: error instanceof Error ? error.message : "Unknown worker error",
+          events,
+        }, {
+          status: 500,
+          headers: {
+            "cache-control": "no-store",
+          },
+        });
+      }
     }
 
     return env.ASSETS.fetch(request);
   },
 };
 
-async function loadDataset(request, env) {
-  if (!datasetPromise) {
-    datasetPromise = (async () => {
-      const datasetRequest = new Request(
-        new URL("/realDataset.json", request.url).toString(),
-      );
-      const response = await env.ASSETS.fetch(datasetRequest);
-      if (!response.ok) {
-        throw new Error(`Failed to load dataset asset (${response.status})`);
+async function loadIndexInfo(env) {
+  if (!indexInfoPromise) {
+    indexInfoPromise = env.CORPUS_INDEX.describe().then((info) => {
+      if ((info.vectorCount || 0) === 0) {
+        indexInfoPromise = undefined;
       }
-
-      return response.json();
-    })();
+      return info;
+    });
   }
-
-  return datasetPromise;
+  return indexInfoPromise;
 }

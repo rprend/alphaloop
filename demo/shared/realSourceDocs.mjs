@@ -53,6 +53,55 @@ function paragraph(topic, motifs, docIndex, paragraphIndex, rng) {
   return lines.join(" ");
 }
 
+function chunkLikeAlphaBook(text, targetSize = 1400) {
+  const paragraphs = text
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+  const chunks = [];
+  let buffer = "";
+
+  for (const paragraph of paragraphs) {
+    if (paragraph.length > targetSize) {
+      if (buffer) {
+        chunks.push(buffer);
+        buffer = "";
+      }
+
+      let start = 0;
+      while (start < paragraph.length) {
+        let end = Math.min(start + targetSize, paragraph.length);
+        if (end < paragraph.length) {
+          const whitespace = paragraph.lastIndexOf(" ", end);
+          if (whitespace > start + Math.floor(targetSize * 0.5)) {
+            end = whitespace;
+          }
+        }
+        chunks.push(paragraph.slice(start, end).trim());
+        start = end;
+        while (start < paragraph.length && /\s/.test(paragraph[start] ?? "")) {
+          start += 1;
+        }
+      }
+      continue;
+    }
+
+    const candidate = buffer ? `${buffer}\n\n${paragraph}` : paragraph;
+    if (candidate.length > targetSize && buffer) {
+      chunks.push(buffer);
+      buffer = paragraph;
+      continue;
+    }
+    buffer = candidate;
+  }
+
+  if (buffer) {
+    chunks.push(buffer);
+  }
+
+  return chunks;
+}
+
 export function buildRealSourceDocuments() {
   const docs = [];
 
@@ -88,4 +137,19 @@ export function buildRealSourceDocuments() {
   }
 
   return docs;
+}
+
+export function buildRealSourceChunks() {
+  return buildRealSourceDocuments().flatMap((doc) =>
+    chunkLikeAlphaBook(doc.text).map((text, chunkIndex) => ({
+      id: `${doc.id}-chunk-${chunkIndex}`,
+      title: doc.title,
+      text,
+      metadata: {
+        ...doc.metadata,
+        documentId: doc.id,
+        chunkIndex,
+      },
+    })),
+  );
 }

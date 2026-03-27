@@ -1,15 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { buildRealSourceDocuments } from "../shared/realSourceDocs.mjs";
+import { buildRealSourceChunks } from "../shared/realSourceDocs.mjs";
 
 const ROOT = process.cwd();
 const ENV_PATH = path.resolve(ROOT, "../alphabook/.dev.vars");
-const OUT_PATH = path.resolve(ROOT, "demo/public/realDataset.json");
+const METADATA_OUT_PATH = path.resolve(ROOT, "demo/public/realDataset.json");
+const EMBEDDINGS_OUT_PATH = path.resolve(ROOT, "demo/public/realEmbeddings.bin");
 
-const docs = buildRealSourceDocuments();
+const chunks = buildRealSourceChunks();
 const env = await loadEnvFile(ENV_PATH);
 const apiKey = env.OPENAI_API_KEY;
 const model = env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-large";
+const dimensions = Number(env.OPENAI_EMBEDDING_DIMENSIONS || 1536);
 
 if (!apiKey) {
   throw new Error(`OPENAI_API_KEY missing from ${ENV_PATH}`);
@@ -18,8 +20,8 @@ if (!apiKey) {
 const embeddings = [];
 const batchSize = 16;
 
-for (let start = 0; start < docs.length; start += batchSize) {
-  const batch = docs.slice(start, start + batchSize);
+for (let start = 0; start < chunks.length; start += batchSize) {
+  const batch = chunks.slice(start, start + batchSize);
   const response = await fetch("https://api.openai.com/v1/embeddings", {
     method: "POST",
     headers: {
@@ -28,7 +30,8 @@ for (let start = 0; start < docs.length; start += batchSize) {
     },
     body: JSON.stringify({
       model,
-      input: batch.map((doc) => doc.text),
+      input: batch.map((chunk) => chunk.text),
+      dimensions,
     }),
   });
 
@@ -42,17 +45,39 @@ for (let start = 0; start < docs.length; start += batchSize) {
   for (const item of json.data) {
     embeddings.push(item.embedding);
   }
-  console.log(`Embedded ${Math.min(start + batch.length, docs.length)} / ${docs.length}`);
+  console.log(`Embedded ${Math.min(start + batch.length, chunks.length)} / ${chunks.length}`);
 }
 
-const dataset = docs.map((doc, index) => ({
-  ...doc,
-  embedding: embeddings[index],
-}));
+const actualDimensions = embeddings[0]?.length ?? 0;
+const quantized = new Int8Array(chunks.length * actualDimensions);
 
-await fs.mkdir(path.dirname(OUT_PATH), { recursive: true });
-await fs.writeFile(OUT_PATH, JSON.stringify(dataset));
-console.log(`Wrote ${OUT_PATH}`);
+for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+  const embedding = embeddings[chunkIndex];
+  let magnitude = 0;
+  for (const value of embedding) {
+    magnitude += value * value;
+  }
+  const scale = magnitude > 0 ? 1 / Math.sqrt(magnitude) : 1;
+
+  for (let dimensionIndex = 0; dimensionIndex < actualDimensions; dimensionIndex++) {
+    const normalized = embedding[dimensionIndex] * scale;
+    quantized[chunkIndex * actualDimensions + dimensionIndex] = Math.max(
+      -127,
+      Math.min(127, Math.round(normalized * 127)),
+    );
+  }
+}
+
+const metadata = {
+  dimensions: actualDimensions,
+  chunks,
+};
+
+await fs.mkdir(path.dirname(METADATA_OUT_PATH), { recursive: true });
+await fs.writeFile(METADATA_OUT_PATH, JSON.stringify(metadata));
+await fs.writeFile(EMBEDDINGS_OUT_PATH, Buffer.from(quantized.buffer));
+console.log(`Wrote ${METADATA_OUT_PATH}`);
+console.log(`Wrote ${EMBEDDINGS_OUT_PATH}`);
 
 async function loadEnvFile(filePath) {
   const text = await fs.readFile(filePath, "utf8");
