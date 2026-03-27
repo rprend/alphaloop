@@ -20,15 +20,22 @@ import { openai } from "@ai-sdk/openai";
 
 const handler = createAlphaloopHandler({
   model: openai("gpt-4o"),
-  search: async (query, { topK }) => {
-    // Your vector search — embed the query and search your database
-    const results = await myVectorDB.search(query, topK);
-    return results.map((r) => ({
-      id: r.id,
-      text: r.text,
-      score: r.score,
-      metadata: r.metadata,
-    }));
+  minScore: 0.75,
+  search: async (query, { minScore, cursor }) => {
+    // Page until your DB is exhausted or scores fall below minScore
+    const page = await myVectorDB.search(query, {
+      minScore,
+      cursor,
+    });
+    return {
+      chunks: page.results.map((r) => ({
+        id: r.id,
+        text: r.text,
+        score: r.score,
+        metadata: r.metadata,
+      })),
+      nextCursor: page.nextCursor,
+    };
   },
 });
 
@@ -65,7 +72,7 @@ Alphaloop runs a 4-step retrieval loop over your embeddings:
 
 ### 1. Embedding Search (recall baseline)
 
-Calls your `search` function with the original query. Retrieves the top N chunks as a starting point.
+Calls your `search` function with the original query and fetches all chunks whose vector score is `>= minScore`.
 
 ### 2. Query Expansion
 
@@ -95,15 +102,16 @@ An optional step that classifies remaining unranked chunks against abstract conc
 createAlphaloopHandler({
   // Required
   model: openai("gpt-4o"),       // Any AI SDK LanguageModel
-  search: mySearchFunction,       // Your embedding search
+  search: mySearchFunction,      // Your paged search, or use searchStream
 
   // Optional
+  minScore: 0.75,                // Strong-match threshold (default: 0)
   rerankModel: openai("gpt-4o-mini"), // Cheaper model for re-ranking
-  initialTopK: 200,              // Chunks per search call (default: 200)
   maxExpandedQueries: 8,         // Query variants per round (default: 8)
   maxIterations: 3,              // Refinement rounds (default: 3)
   relevanceThreshold: 0.3,       // Min relevance score 0-1 (default: 0.3)
   enableClassifier: false,       // Enable classifier step (default: false)
+  maxContextTokens: 100_000,     // Max tokens per single LLM call
   systemPrompt: "...",           // Custom system prompt
   additionalTools: { ... },      // Extra AI SDK tools
   maxToolSteps: 5,               // Max tool call steps (default: 5)
@@ -112,13 +120,18 @@ createAlphaloopHandler({
 
 ## Search Function
 
-Your search function takes a string query and returns chunks. You handle embedding internally — alphaloop only generates query strings.
+Your search function takes a string query and returns all strong matches above `minScore`. Alphaloop handles recursive sharding after retrieval; your vector store handles paging or streaming.
 
 ```ts
 type EmbeddingSearchFn = (
   query: string,
-  options: { topK: number },
-) => Promise<EmbeddingChunk[]>;
+  options: { minScore: number; cursor?: string; signal?: AbortSignal },
+) => Promise<{ chunks: EmbeddingChunk[]; nextCursor?: string }>;
+
+type EmbeddingSearchStreamFn = (
+  query: string,
+  options: { minScore: number; signal?: AbortSignal },
+) => AsyncIterable<EmbeddingChunk>;
 
 interface EmbeddingChunk {
   id: string;
@@ -168,12 +181,17 @@ import { openai } from "@ai-sdk/openai";
 const loop = createAlphaloop({
   model: openai("gpt-4o"),
   search: mySearchFn,
+  minScore: 0.75,
 });
 
-// Run the full loop
-const result = await loop.run("What is consciousness?");
+// Run the full loop with runtime overrides
+const result = await loop.run("What is consciousness?", {
+  minScore: 0.8,
+  maxContextTokens: 100_000,
+});
 console.log(result.chunks);     // Ranked results
 console.log(result.iterations); // Loop telemetry
+console.log(result.totalChunksMatched);
 
 // Or use as AI SDK tools
 const tools = loop.tools();

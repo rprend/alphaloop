@@ -12,25 +12,45 @@ export interface EmbeddingChunk {
   metadata?: Record<string, unknown>;
 }
 
-/** The function the user provides to search their embeddings. */
+export interface SearchPage {
+  chunks: EmbeddingChunk[];
+  nextCursor?: string;
+}
+
+/** Paged search contract for vector stores. */
 export type EmbeddingSearchFn = (
   query: string,
-  options: { topK: number },
-) => Promise<EmbeddingChunk[]>;
+  options: { minScore: number; cursor?: string; signal?: AbortSignal },
+) => Promise<SearchPage>;
+
+/** Streaming search contract for vector stores. */
+export type EmbeddingSearchStreamFn = (
+  query: string,
+  options: { minScore: number; signal?: AbortSignal },
+) => AsyncIterable<EmbeddingChunk>;
 
 /** Configuration for the agentic retrieval loop. */
-export interface AlphaloopConfig {
-  /** The user's embedding search function. Takes a string query, returns chunks. */
-  search: EmbeddingSearchFn;
+export type AlphaloopConfig =
+  | (AlphaloopSharedConfig & {
+      /** The user's paged embedding search function. */
+      search: EmbeddingSearchFn;
+      searchStream?: never;
+    })
+  | (AlphaloopSharedConfig & {
+      /** The user's streaming embedding search function. */
+      searchStream: EmbeddingSearchStreamFn;
+      search?: never;
+    });
+
+export interface AlphaloopSharedConfig {
+  /** Minimum vector similarity score for a chunk to be treated as a strong match. */
+  minScore?: number;
 
   /** AI SDK LanguageModel for query expansion, re-ranking, and synthesis. */
   model: LanguageModel;
 
   /** Optional: separate (cheaper/faster) model for re-ranking. Defaults to `model`. */
   rerankModel?: LanguageModel;
-
-  /** Maximum chunks to retrieve per search call (default: 200). */
-  initialTopK?: number;
 
   /** Maximum expanded queries to generate per round (default: 8). */
   maxExpandedQueries?: number;
@@ -50,8 +70,19 @@ export interface AlphaloopConfig {
   /** Custom system prompt for re-ranking. */
   rerankPrompt?: string;
 
+  /** Maximum context budget for any single LLM call (default: 100,000). */
+  maxContextTokens?: number;
+
+  /** Optional token estimator override. */
+  tokenEstimator?: (text: string) => number;
+
   /** Abort signal for cancellation. */
   signal?: AbortSignal;
+}
+
+export interface AlphaloopRunOptions {
+  minScore?: number;
+  maxContextTokens?: number;
 }
 
 /** A chunk that has been scored by the LLM re-ranker. */
@@ -82,6 +113,14 @@ export interface AlphaloopResult {
   iterations: LoopIterationResult[];
   /** Total unique chunks considered across all iterations. */
   totalChunksConsidered: number;
+  /** Total matched chunks before deduplication across all search calls. */
+  totalChunksMatched: number;
+  /** Runtime minScore used for this run. */
+  minScoreUsed: number;
+  /** Deepest recursive shard depth reached. */
+  recursionDepth: number;
+  /** Total shards processed across recursive LLM steps. */
+  shardCount: number;
 }
 
 /** Stream events emitted during loop execution. */
@@ -90,12 +129,17 @@ export type AlphaloopStreamEvent =
       type: "embedding_search";
       query: string;
       chunksFound: number;
+      chunksMatched: number;
+      pagesFetched: number;
+      minScore: number;
     }
   | {
       type: "query_expansion";
       queries: string[];
       newChunksFound: number;
       totalUnique: number;
+      shardCount?: number;
+      recursionDepth?: number;
     }
   | {
       type: "rerank";
@@ -103,6 +147,8 @@ export type AlphaloopStreamEvent =
       keptChunks: number;
       droppedChunks: number;
       topChunkPreview?: string;
+      shardCount?: number;
+      recursionDepth?: number;
     }
   | {
       type: "iterative_search";
@@ -110,36 +156,45 @@ export type AlphaloopStreamEvent =
       newQueries: string[];
       newChunksFound: number;
       totalUnique: number;
+      shardCount?: number;
+      recursionDepth?: number;
     }
   | {
       type: "classifier";
       classified: number;
       kept: number;
       dropped: number;
+      shardCount?: number;
+      recursionDepth?: number;
     }
   | {
       type: "complete";
       totalChunks: number;
       iterations: number;
+      totalChunksMatched: number;
+      minScore: number;
+      shardCount: number;
+      recursionDepth: number;
     }
   | {
       type: "error";
       message: string;
     };
 
+export interface ResolvedLoopConfig extends AlphaloopSharedConfig {
+  minScore: number;
+  maxExpandedQueries: number;
+  maxIterations: number;
+  relevanceThreshold: number;
+  enableClassifier: boolean;
+  maxContextTokens: number;
+}
+
 /** Internal context passed between loop steps. */
 export interface LoopContext {
-  config: Required<
-    Pick<
-      AlphaloopConfig,
-      | "initialTopK"
-      | "maxExpandedQueries"
-      | "maxIterations"
-      | "relevanceThreshold"
-      | "enableClassifier"
-    >
-  > &
-    AlphaloopConfig;
+  config: ResolvedLoopConfig &
+    Omit<AlphaloopConfig, keyof AlphaloopSharedConfig> &
+    AlphaloopSharedConfig;
   /** All unique chunks seen so far, keyed by id. */
   seenChunks: Map<string, EmbeddingChunk>;
   /** Chunks that passed re-ranking, keyed by id. */
@@ -148,6 +203,14 @@ export interface LoopContext {
   triedQueries: Set<string>;
   /** Iteration telemetry. */
   iterations: LoopIterationResult[];
+  /** Total matched chunks before dedupe. */
+  totalChunksMatched: number;
+  /** Number of retrieval pages or stream pulls observed. */
+  retrievalRequests: number;
+  /** Total recursive shards executed. */
+  shardCount: number;
+  /** Maximum recursion depth observed. */
+  recursionDepth: number;
   /** Callback to emit stream events. */
   emit: (event: AlphaloopStreamEvent) => void;
 }

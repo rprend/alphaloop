@@ -1,7 +1,9 @@
 import { generateObject } from "ai";
 import { z } from "zod";
+import { reduceChunksToSummary } from "../context-budget.js";
 import { ITERATIVE_SEARCH_PROMPT } from "../defaults.js";
-import type { LoopContext, RankedChunk } from "../types.js";
+import { collectStrongMatches } from "../search-adapter.js";
+import type { LoopContext } from "../types.js";
 import { rerank } from "./rerank.js";
 
 /**
@@ -21,13 +23,17 @@ export async function iterativeSearch(
     // Get current top-ranked chunks to feed back
     const topChunks = Array.from(ctx.rankedChunks.values())
       .sort((a, b) => b.relevance - a.relevance)
-      .slice(0, 10);
+      .slice(0, Math.max(10, ctx.rankedChunks.size));
 
     if (topChunks.length === 0) break;
 
-    const passageSummaries = topChunks
-      .map((c) => c.text.slice(0, 300))
-      .join("\n---\n");
+    const passageSummaries = await reduceChunksToSummary(
+      `ranked evidence iteration ${iteration}`,
+      originalQuery,
+      topChunks,
+      ctx,
+      "Compress these ranked passages into an evidence-complete concept summary for generating follow-up searches.",
+    );
 
     const count = Math.max(3, Math.ceil(ctx.config.maxExpandedQueries / 2));
     const systemPrompt = ITERATIVE_SEARCH_PROMPT.replace(
@@ -69,23 +75,28 @@ Generate ${count} NEW search queries that explore concepts discovered in these p
     // Search with new queries
     const allResults = await Promise.all(
       newQueries.map(async (query) => {
-        ctx.triedQueries.add(query.toLowerCase().trim());
-        return ctx.config.search(query, {
-          topK: Math.ceil(ctx.config.initialTopK / 3),
-        });
+        const normalized = query.toLowerCase().trim();
+        ctx.triedQueries.add(normalized);
+        return collectStrongMatches(query, ctx);
       }),
     );
 
     // Collect only truly new chunks
     const newChunks = [];
+    let matched = 0;
+    let requests = 0;
     for (const results of allResults) {
-      for (const chunk of results) {
+      matched += results.matched;
+      requests += results.requests;
+      for (const chunk of results.chunks) {
         if (!ctx.seenChunks.has(chunk.id)) {
           ctx.seenChunks.set(chunk.id, chunk);
           newChunks.push(chunk);
         }
       }
     }
+    ctx.totalChunksMatched += matched;
+    ctx.retrievalRequests += requests;
 
     // Re-rank the new chunks
     if (newChunks.length > 0) {
@@ -108,6 +119,8 @@ Generate ${count} NEW search queries that explore concepts discovered in these p
       newQueries,
       newChunksFound: newChunks.length,
       totalUnique: ctx.seenChunks.size,
+      shardCount: ctx.shardCount,
+      recursionDepth: ctx.recursionDepth,
     });
 
     // Stop early if no new chunks found

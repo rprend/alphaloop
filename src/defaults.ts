@@ -1,9 +1,10 @@
 export const DEFAULTS = {
-  initialTopK: 200,
+  minScore: 0,
   maxExpandedQueries: 8,
   maxIterations: 3,
   relevanceThreshold: 0.3,
   enableClassifier: false,
+  maxContextTokens: 100_000,
 } as const;
 
 export const QUERY_EXPANSION_PROMPT = `You are a search query expansion expert. Given a user's search query and optionally some initial results, generate diverse query variants that will maximize recall over an embeddings dataset.

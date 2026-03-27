@@ -1,6 +1,8 @@
 import { generateObject } from "ai";
 import { z } from "zod";
+import { reduceChunksToSummary } from "../context-budget.js";
 import { QUERY_EXPANSION_PROMPT } from "../defaults.js";
+import { collectStrongMatches } from "../search-adapter.js";
 import type { EmbeddingChunk, LoopContext } from "../types.js";
 
 /**
@@ -17,10 +19,16 @@ export async function queryExpansion(
     ctx.config.queryExpansionPrompt ?? QUERY_EXPANSION_PROMPT
   ).replace("{count}", String(count));
 
-  const contextSnippets = initialChunks
-    .slice(0, 5)
-    .map((c) => c.text.slice(0, 200))
-    .join("\n---\n");
+  const contextSummary =
+    initialChunks.length > 0
+      ? await reduceChunksToSummary(
+          "initial strong matches",
+          originalQuery,
+          initialChunks,
+          ctx,
+          "Preserve every retrieval-relevant concept, phrasing variation, and named entity from these matches.",
+        )
+      : "";
 
   const { object: queries } = await generateObject({
     model: ctx.config.model,
@@ -30,7 +38,7 @@ export async function queryExpansion(
     system: systemPrompt,
     prompt: `Original query: "${originalQuery}"
 
-${contextSnippets ? `Here are some initial results for context:\n${contextSnippets}` : "No initial results available."}
+${contextSummary ? `Here are the distilled strong matches for context:\n${contextSummary}` : "No initial results available."}
 
 Generate ${count} diverse query variants.`,
     abortSignal: ctx.config.signal,
@@ -45,18 +53,21 @@ Generate ${count} diverse query variants.`,
   // Run all new queries in parallel
   const allResults = await Promise.all(
     newQueries.map(async (query) => {
-      ctx.triedQueries.add(query.toLowerCase().trim());
-      return ctx.config.search(query, {
-        topK: Math.ceil(ctx.config.initialTopK / 2),
-      });
+      const normalized = query.toLowerCase().trim();
+      ctx.triedQueries.add(normalized);
+      return collectStrongMatches(query, ctx);
     }),
   );
 
   // Collect new chunks
   let newCount = 0;
+  let matched = 0;
+  let requests = 0;
   const allNewChunks: EmbeddingChunk[] = [];
   for (const results of allResults) {
-    for (const chunk of results) {
+    matched += results.matched;
+    requests += results.requests;
+    for (const chunk of results.chunks) {
       if (!ctx.seenChunks.has(chunk.id)) {
         ctx.seenChunks.set(chunk.id, chunk);
         allNewChunks.push(chunk);
@@ -70,7 +81,12 @@ Generate ${count} diverse query variants.`,
     queries: newQueries,
     newChunksFound: newCount,
     totalUnique: ctx.seenChunks.size,
+    shardCount: ctx.shardCount,
+    recursionDepth: ctx.recursionDepth,
   });
+
+  ctx.totalChunksMatched += matched;
+  ctx.retrievalRequests += requests;
 
   return allNewChunks;
 }

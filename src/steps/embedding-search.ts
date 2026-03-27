@@ -1,3 +1,4 @@
+import { collectStrongMatches } from "../search-adapter.js";
 import type { EmbeddingChunk, LoopContext } from "../types.js";
 
 /**
@@ -8,9 +9,10 @@ export async function embeddingSearch(
   query: string,
   ctx: LoopContext,
 ): Promise<EmbeddingChunk[]> {
-  const results = await ctx.config.search(query, {
-    topK: ctx.config.initialTopK,
-  });
+  const { chunks: results, matched, requests } = await collectStrongMatches(
+    query,
+    ctx,
+  );
 
   let newCount = 0;
   for (const chunk of results) {
@@ -20,12 +22,17 @@ export async function embeddingSearch(
     }
   }
 
-  ctx.triedQueries.add(query);
+  ctx.triedQueries.add(query.toLowerCase().trim());
+  ctx.totalChunksMatched += matched;
+  ctx.retrievalRequests += requests;
 
   ctx.emit({
     type: "embedding_search",
     query,
     chunksFound: newCount,
+    chunksMatched: matched,
+    pagesFetched: requests,
+    minScore: ctx.config.minScore,
   });
 
   return results;

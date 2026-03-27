@@ -6,33 +6,41 @@ import { iterativeSearch } from "./steps/iterative-search.js";
 import { classify } from "./steps/classifier.js";
 import type {
   AlphaloopConfig,
+  AlphaloopRunOptions,
   AlphaloopResult,
   AlphaloopStreamEvent,
-  EmbeddingChunk,
   LoopContext,
-  RankedChunk,
 } from "./types.js";
 import { alphaloopTools } from "./tools.js";
 
 function createLoopContext(
   config: AlphaloopConfig,
+  options: AlphaloopRunOptions,
   emit: (event: AlphaloopStreamEvent) => void,
 ): LoopContext {
   return {
     config: {
       ...config,
-      initialTopK: config.initialTopK ?? DEFAULTS.initialTopK,
+      minScore: options.minScore ?? config.minScore ?? DEFAULTS.minScore,
       maxExpandedQueries:
         config.maxExpandedQueries ?? DEFAULTS.maxExpandedQueries,
       maxIterations: config.maxIterations ?? DEFAULTS.maxIterations,
       relevanceThreshold:
         config.relevanceThreshold ?? DEFAULTS.relevanceThreshold,
       enableClassifier: config.enableClassifier ?? DEFAULTS.enableClassifier,
+      maxContextTokens:
+        options.maxContextTokens ??
+        config.maxContextTokens ??
+        DEFAULTS.maxContextTokens,
     },
     seenChunks: new Map(),
     rankedChunks: new Map(),
     triedQueries: new Set(),
     iterations: [],
+    totalChunksMatched: 0,
+    retrievalRequests: 0,
+    shardCount: 0,
+    recursionDepth: 0,
     emit,
   };
 }
@@ -43,9 +51,10 @@ function createLoopContext(
 async function run(
   query: string,
   config: AlphaloopConfig,
+  options: AlphaloopRunOptions = {},
   emit: (event: AlphaloopStreamEvent) => void = () => {},
 ): Promise<AlphaloopResult> {
-  const ctx = createLoopContext(config, emit);
+  const ctx = createLoopContext(config, options, emit);
 
   // Step 1: Initial embedding search
   const initialChunks = await embeddingSearch(query, ctx);
@@ -74,12 +83,20 @@ async function run(
     type: "complete",
     totalChunks: finalChunks.length,
     iterations: ctx.iterations.length,
+    totalChunksMatched: ctx.totalChunksMatched,
+    minScore: ctx.config.minScore,
+    shardCount: ctx.shardCount,
+    recursionDepth: ctx.recursionDepth,
   });
 
   return {
     chunks: finalChunks,
     iterations: ctx.iterations,
     totalChunksConsidered: ctx.seenChunks.size,
+    totalChunksMatched: ctx.totalChunksMatched,
+    minScoreUsed: ctx.config.minScore,
+    recursionDepth: ctx.recursionDepth,
+    shardCount: ctx.shardCount,
   };
 }
 
@@ -89,13 +106,17 @@ async function run(
 export function createAlphaloop(config: AlphaloopConfig) {
   return {
     /** Run the full loop and return results. */
-    async run(query: string): Promise<AlphaloopResult> {
-      return run(query, config);
+    async run(
+      query: string,
+      options?: AlphaloopRunOptions,
+    ): Promise<AlphaloopResult> {
+      return run(query, config, options);
     },
 
     /** Run the loop as an async iterable of stream events. */
     async *stream(
       query: string,
+      options?: AlphaloopRunOptions,
     ): AsyncGenerator<AlphaloopStreamEvent, AlphaloopResult> {
       const events: AlphaloopStreamEvent[] = [];
       let resolve: (() => void) | null = null;
@@ -105,7 +126,7 @@ export function createAlphaloop(config: AlphaloopConfig) {
         resolve?.();
       };
 
-      const resultPromise = run(query, config, emit);
+      const resultPromise = run(query, config, options, emit);
 
       // Yield events as they arrive
       let done = false;

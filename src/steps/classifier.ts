@@ -1,5 +1,11 @@
 import { generateObject } from "ai";
 import { z } from "zod";
+import {
+  availablePromptTokens,
+  estimateTokens,
+  normalizeChunkForModel,
+  shardByTokens,
+} from "../context-budget.js";
 import { CLASSIFIER_PROMPT } from "../defaults.js";
 import type { EmbeddingChunk, LoopContext, RankedChunk } from "../types.js";
 
@@ -31,16 +37,28 @@ export async function classify(
     return;
   }
 
-  // Classify in parallel batches
-  const concurrency = 10;
+  const prepared = await Promise.all(
+    unranked.map(async (chunk) => ({
+      chunk,
+      promptText: await normalizeChunkForModel(chunk, query, ctx),
+    })),
+  );
+  const combinedTokens = prepared.reduce(
+    (total, item) => total + estimateTokens(item.promptText, ctx),
+    0,
+  );
+  const shards =
+    combinedTokens <= availablePromptTokens(ctx)
+      ? [prepared]
+      : shardByTokens(prepared, (item) => item.promptText, ctx);
+  ctx.shardCount += shards.length;
+
   let kept = 0;
   let dropped = 0;
 
-  for (let i = 0; i < unranked.length; i += concurrency) {
-    const batch = unranked.slice(i, i + concurrency);
-
-    const results = await Promise.all(
-      batch.map(async (chunk) => {
+  const results = await Promise.all(
+    shards.flatMap((shard) =>
+      shard.map(async ({ chunk, promptText }) => {
         const { object } = await generateObject({
           model: ctx.config.rerankModel ?? ctx.config.model,
           schema: ClassifyResponseSchema,
@@ -48,7 +66,7 @@ export async function classify(
           prompt: `Concept: "${query}"
 
 Passage:
-${chunk.text.slice(0, 800)}
+${promptText}
 
 Is this passage relevant to the concept above?`,
           abortSignal: ctx.config.signal,
@@ -56,21 +74,21 @@ Is this passage relevant to the concept above?`,
 
         return { chunk, ...object };
       }),
-    );
+    ),
+  );
 
-    for (const result of results) {
-      if (result.relevant && result.confidence >= 0.5) {
-        const ranked: RankedChunk = {
-          ...result.chunk,
-          relevance: result.confidence * 0.8, // Slight discount vs. re-ranked
-          rationale: result.rationale,
-          sourceQuery: "classifier",
-        };
-        ctx.rankedChunks.set(ranked.id, ranked);
-        kept++;
-      } else {
-        dropped++;
-      }
+  for (const result of results) {
+    if (result.relevant && result.confidence >= 0.5) {
+      const ranked: RankedChunk = {
+        ...result.chunk,
+        relevance: result.confidence * 0.8,
+        rationale: result.rationale,
+        sourceQuery: "classifier",
+      };
+      ctx.rankedChunks.set(ranked.id, ranked);
+      kept++;
+    } else {
+      dropped++;
     }
   }
 
@@ -79,5 +97,7 @@ Is this passage relevant to the concept above?`,
     classified: unranked.length,
     kept,
     dropped,
+    shardCount: shards.length,
+    recursionDepth: ctx.recursionDepth,
   });
 }

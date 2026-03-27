@@ -1,9 +1,13 @@
 import { generateObject } from "ai";
 import { z } from "zod";
+import {
+  availablePromptTokens,
+  estimateTokens,
+  normalizeChunkForModel,
+  shardByTokens,
+} from "../context-budget.js";
 import { RERANK_PROMPT } from "../defaults.js";
 import type { EmbeddingChunk, LoopContext, RankedChunk } from "../types.js";
-
-const BATCH_SIZE = 20;
 
 const RerankResponseSchema = z.object({
   results: z.array(
@@ -24,60 +28,64 @@ export async function rerank(
   chunks: EmbeddingChunk[],
   ctx: LoopContext,
   options?: { sourceQuery?: string; iteration?: number },
+  depth = 1,
 ): Promise<RankedChunk[]> {
   const model = ctx.config.rerankModel ?? ctx.config.model;
   const systemPrompt = ctx.config.rerankPrompt ?? RERANK_PROMPT;
-
-  // Batch chunks for re-ranking
-  const batches: EmbeddingChunk[][] = [];
-  for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
-    batches.push(chunks.slice(i, i + BATCH_SIZE));
-  }
+  ctx.recursionDepth = Math.max(ctx.recursionDepth, depth);
 
   const allRanked: RankedChunk[] = [];
+  const prepared = await Promise.all(
+    chunks.map(async (chunk) => ({
+      chunk,
+      promptText: await normalizeChunkForModel(chunk, query, ctx, depth + 1),
+    })),
+  );
 
-  // Process batches in parallel (up to 5 concurrent)
-  const concurrency = 5;
-  for (let i = 0; i < batches.length; i += concurrency) {
-    const batchSlice = batches.slice(i, i + concurrency);
+  const combinedTokens = prepared.reduce(
+    (total, item) => total + estimateTokens(item.promptText, ctx),
+    0,
+  );
+  const shards =
+    combinedTokens <= availablePromptTokens(ctx)
+      ? [prepared]
+      : shardByTokens(prepared, (item) => item.promptText, ctx);
+  ctx.shardCount += shards.length;
 
-    const results = await Promise.all(
-      batchSlice.map(async (batch) => {
-        const passageList = batch
-          .map(
-            (c, idx) =>
-              `[${idx}] (id: ${c.id})\n${c.text.slice(0, 500)}`,
-          )
-          .join("\n\n");
+  const results = await Promise.all(
+    shards.map(async (shard) => {
+      const passageList = shard
+        .map((item, idx) => `[${idx}] (id: ${item.chunk.id})\n${item.promptText}`)
+        .join("\n\n");
 
-        const { object } = await generateObject({
-          model,
-          schema: RerankResponseSchema,
-          system: systemPrompt,
-          prompt: `Search query: "${query}"
+      const { object } = await generateObject({
+        model,
+        schema: RerankResponseSchema,
+        system: systemPrompt,
+        prompt: `Search query: "${query}"
 
 Score each passage for relevance to the query:
 
 ${passageList}`,
-          abortSignal: ctx.config.signal,
-        });
+        abortSignal: ctx.config.signal,
+      });
 
-        return object.results.map((r) => {
-          const original = batch.find((c) => c.id === r.id) ?? batch[0];
-          return {
-            ...original,
-            relevance: r.relevance,
-            rationale: r.rationale,
-            sourceQuery: options?.sourceQuery,
-            iteration: options?.iteration,
-          } satisfies RankedChunk;
-        });
-      }),
-    );
+      return object.results.map((r) => {
+        const original =
+          shard.find((item) => item.chunk.id === r.id)?.chunk ?? shard[0].chunk;
+        return {
+          ...original,
+          relevance: r.relevance,
+          rationale: r.rationale,
+          sourceQuery: options?.sourceQuery,
+          iteration: options?.iteration,
+        } satisfies RankedChunk;
+      });
+    }),
+  );
 
-    for (const batch of results) {
-      allRanked.push(...batch);
-    }
+  for (const batch of results) {
+    allRanked.push(...batch);
   }
 
   // Filter by threshold and sort
@@ -100,6 +108,8 @@ ${passageList}`,
     keptChunks: kept.length,
     droppedChunks: chunks.length - kept.length,
     topChunkPreview: kept[0]?.text.slice(0, 100),
+    shardCount: shards.length,
+    recursionDepth: ctx.recursionDepth,
   });
 
   return kept;

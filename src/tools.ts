@@ -1,6 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { DEFAULTS } from "./defaults.js";
+import { buildToolPayload } from "./response-payload.js";
 import { embeddingSearch } from "./steps/embedding-search.js";
 import { queryExpansion } from "./steps/query-expansion.js";
 import { rerank } from "./steps/rerank.js";
@@ -8,12 +9,14 @@ import { iterativeSearch } from "./steps/iterative-search.js";
 import { classify } from "./steps/classifier.js";
 import type {
   AlphaloopConfig,
+  AlphaloopRunOptions,
   AlphaloopStreamEvent,
   LoopContext,
 } from "./types.js";
 
 function createLoopContext(
   config: AlphaloopConfig,
+  options: AlphaloopRunOptions = {},
 ): { ctx: LoopContext; progress: string[]; logLines: Array<{ key: string; value: string }> } {
   const progress: string[] = [];
   const logLines: Array<{ key: string; value: string }> = [];
@@ -24,7 +27,7 @@ function createLoopContext(
         progress.push(`Searching embeddings for "${event.query}"`);
         logLines.push({
           key: "Initial search",
-          value: `Found ${event.chunksFound} chunks`,
+          value: `Found ${event.chunksFound} new of ${event.chunksMatched} matched`,
         });
         break;
       case "query_expansion":
@@ -85,18 +88,26 @@ function createLoopContext(
   const ctx: LoopContext = {
     config: {
       ...config,
-      initialTopK: config.initialTopK ?? DEFAULTS.initialTopK,
+      minScore: options.minScore ?? config.minScore ?? DEFAULTS.minScore,
       maxExpandedQueries:
         config.maxExpandedQueries ?? DEFAULTS.maxExpandedQueries,
       maxIterations: config.maxIterations ?? DEFAULTS.maxIterations,
       relevanceThreshold:
         config.relevanceThreshold ?? DEFAULTS.relevanceThreshold,
       enableClassifier: config.enableClassifier ?? DEFAULTS.enableClassifier,
+      maxContextTokens:
+        options.maxContextTokens ??
+        config.maxContextTokens ??
+        DEFAULTS.maxContextTokens,
     },
     seenChunks: new Map(),
     rankedChunks: new Map(),
     triedQueries: new Set(),
     iterations: [],
+    totalChunksMatched: 0,
+    retrievalRequests: 0,
+    shardCount: 0,
+    recursionDepth: 0,
     emit,
   };
 
@@ -117,9 +128,20 @@ export function alphaloopTools(config: AlphaloopConfig) {
           .number()
           .optional()
           .describe("Maximum results to return (default: 20)"),
+        minScore: z
+          .number()
+          .optional()
+          .describe("Minimum vector score a chunk must meet to be considered a strong match"),
+        maxContextTokens: z
+          .number()
+          .optional()
+          .describe("Maximum context tokens for any single LLM call"),
       }),
-      execute: async ({ query, maxResults }) => {
-        const { ctx, progress, logLines } = createLoopContext(config);
+      execute: async ({ query, maxResults, minScore, maxContextTokens }) => {
+        const { ctx, progress, logLines } = createLoopContext(config, {
+          minScore,
+          maxContextTokens,
+        });
 
         // Step 1: Initial embedding search
         const initialChunks = await embeddingSearch(query, ctx);
@@ -146,17 +168,16 @@ export function alphaloopTools(config: AlphaloopConfig) {
         const finalChunks = Array.from(ctx.rankedChunks.values())
           .sort((a, b) => b.relevance - a.relevance)
           .slice(0, maxResults ?? 20);
+        const payload = await buildToolPayload(query, finalChunks, ctx);
 
         return {
-          chunks: finalChunks.map((c) => ({
-            id: c.id,
-            text: c.text,
-            relevance: c.relevance,
-            rationale: c.rationale,
-            metadata: c.metadata,
-          })),
+          ...payload,
           totalConsidered: ctx.seenChunks.size,
+          totalMatched: ctx.totalChunksMatched,
           iterationsRun: ctx.iterations.length,
+          minScoreUsed: ctx.config.minScore,
+          shardCount: ctx.shardCount,
+          recursionDepth: ctx.recursionDepth,
           __progress: progress,
           __logLines: logLines,
         };
