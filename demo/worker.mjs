@@ -210,6 +210,15 @@ export class RunJob extends DurableObject {
         apiKey: this.env.OPENAI_API_KEY,
         embeddingModelId:
           this.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-large",
+        onTrace: (event) => {
+          events.push(event);
+          this.ctx.waitUntil(
+            persist({
+              status: "running",
+              events: [...events],
+            }),
+          );
+        },
       });
 
       const run = await runRealStressScenario({
@@ -227,7 +236,7 @@ export class RunJob extends DurableObject {
         maxContextTokens: body.maxContextTokens,
         maxExpandedQueries: body.maxExpandedQueries,
         maxIterations: body.maxIterations,
-        onEvent(event) {
+        onEvent: (event) => {
           events.push(event);
           this.ctx.waitUntil(
             persist({

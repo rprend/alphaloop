@@ -176,6 +176,7 @@ export function createVectorizeSearch({
   embeddingModelId,
   pageSize = 500,
   onSearchStats,
+  onTrace,
 }) {
   const rankingCache = new Map();
 
@@ -219,17 +220,25 @@ export function createVectorizeSearch({
     return embedding;
   }
 
-  async function getRankedBaseChunks(query) {
-    const cacheKey = query.trim().toLowerCase();
+  async function getRankedBaseChunks(query, requestedTopK) {
+    const cacheKey = `${query.trim().toLowerCase()}::${requestedTopK ?? "all"}`;
     const cached = rankingCache.get(cacheKey);
     if (cached) {
       return cached;
     }
 
+    onTrace?.({
+      type: "phase",
+      label: `Embedding query for vector search`,
+    });
     const embedding = await createQueryEmbedding(query);
     const normalizedQuery = normalizeVector(embedding);
-    const topK = Math.max(1000, totalChunks || 0);
+    const topK = requestedTopK ?? Math.max(1000, totalChunks || 0);
 
+    onTrace?.({
+      type: "phase",
+      label: `Querying Vectorize with topK ${topK}`,
+    });
     const response = await index.query(normalizedQuery, {
       topK,
       returnMetadata: "all",
@@ -254,7 +263,7 @@ export function createVectorizeSearch({
   }
 
   return async function search(query, { minScore, topK, cursor }) {
-    const ranked = await getRankedBaseChunks(query);
+    const ranked = await getRankedBaseChunks(query, topK);
     const threshold = minScore ?? 0;
     const baseMatches = ranked.filter((chunk) => chunk.score >= threshold);
     const totalStrongMatches = baseMatches.length * scenario.replicaCount;

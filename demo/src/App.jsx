@@ -5,7 +5,7 @@ import { REAL_SCENARIO_LIST, REAL_STRESS_SCENARIOS } from "../shared/realStressS
 export default function App() {
   const [scenarioId, setScenarioId] = useState("recursive");
   const [query, setQuery] = useState(REAL_STRESS_SCENARIOS.recursive.query);
-  const [mode, setMode] = useState("minScore");
+  const [mode, setMode] = useState("topK");
   const [minScore, setMinScore] = useState(REAL_STRESS_SCENARIOS.recursive.minScore);
   const [topK, setTopK] = useState(24);
   const [maxIterations, setMaxIterations] = useState(
@@ -121,7 +121,9 @@ export default function App() {
           This demo uses the stock <code>SearchProgress</code> and{" "}
           <code>Citations</code> components only. The UI calls a Cloudflare
           Worker that runs alphaloop with live OpenAI embeddings and live OpenAI
-          model calls.
+          model calls. It defaults to focused <code>topK</code> retrieval so the
+          live demo returns results quickly; switch to comprehensive{" "}
+          <code>minScore</code> mode if you want the slower full-recall path.
         </p>
       </section>
 
