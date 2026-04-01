@@ -66,7 +66,16 @@ function Search() {
 }
 ```
 
-That's it. The handler runs the full agentic loop and streams results.
+That is enough for the compiled high-recall path. The handler now also exposes lower-level search-session tools alongside `deep_search` so the model can manage context explicitly when needed.
+
+## Tool Model
+
+Alphaloop now supports two retrieval modes:
+
+- `deep_search`: compiled retrieval policy with query expansion, reranking, and iterative refinement
+- low-level search session tools: `search_corpus`, `grep_corpus`, `read_document`, `prune_chunks`
+
+The low-level tools share a visible working set. Each tool returns session token usage, soft-limit and hard-limit state, visible chunk/document IDs, and recent observations. `prune_chunks` removes items from the visible working set while preserving encounter history so future searches can still exclude already-seen chunks.
 
 ## How It Works
 
@@ -115,6 +124,11 @@ createAlphaloopHandler({
   relevanceThreshold: 0.3,       // Min relevance score 0-1 (default: 0.3)
   enableClassifier: false,       // Enable classifier step (default: false)
   maxContextTokens: 100_000,     // Max tokens per single LLM call
+  softContextLimitRatio: 0.5,    // Visible context pressure warning threshold
+  hardContextLimitRatio: 0.8,    // Visible context cutoff for non-prune tools
+  outputTokenReserve: 4_000,     // Reserve for the model's next response
+  grepCorpus: async (pattern) => [...], // Optional regex/exact search
+  readDocument: async (docId) => ({ id: docId, text: "..." }), // Optional full-document reader
   systemPrompt: "...",           // Custom system prompt
   additionalTools: { ... },      // Extra AI SDK tools
   maxToolSteps: 5,               // Max tool call steps (default: 5)
@@ -133,12 +147,13 @@ type EmbeddingSearchFn = (
     topK?: number;
     cursor?: string;
     signal?: AbortSignal;
+    excludeChunkIds?: string[];
   },
 ) => Promise<{ chunks: EmbeddingChunk[]; nextCursor?: string }>;
 
 type EmbeddingSearchStreamFn = (
   query: string,
-  options: { minScore?: number; topK?: number; signal?: AbortSignal },
+  options: { minScore?: number; topK?: number; signal?: AbortSignal; excludeChunkIds?: string[] },
 ) => AsyncIterable<EmbeddingChunk>;
 
 interface EmbeddingChunk {
@@ -150,6 +165,8 @@ interface EmbeddingChunk {
 ```
 
 Works with any vector database: Cloudflare Vectorize, Pinecone, Weaviate, pgvector, in-memory, etc.
+
+`excludeChunkIds` is optional but recommended. Alphaloop will pass previously encountered chunk IDs so backends that support filtering can avoid re-retrieving the same evidence across turns.
 
 ## React Components
 
@@ -208,7 +225,7 @@ console.log(result.totalChunksMatched);
 
 // Or use as AI SDK tools
 const tools = loop.tools();
-// tools.deep_search — use with streamText()
+// tools.search_corpus / grep_corpus / read_document / prune_chunks / deep_search
 ```
 
 ## Demo Stress Lab

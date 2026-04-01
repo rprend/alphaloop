@@ -5,6 +5,9 @@ export const DEFAULTS = {
   relevanceThreshold: 0.3,
   enableClassifier: false,
   maxContextTokens: 100_000,
+  softContextLimitRatio: 0.5,
+  hardContextLimitRatio: 0.8,
+  outputTokenReserve: 4_000,
 } as const;
 
 export const QUERY_EXPANSION_PROMPT = `You are a search query expansion expert. Given a user's search query and optionally some initial results, generate diverse query variants that will maximize recall over an embeddings dataset.

@@ -7,20 +7,8 @@ import {
   tool,
   type UIMessage,
 } from "ai";
-import { z } from "zod";
-import { DEFAULTS } from "./defaults.js";
-import { buildToolPayload } from "./response-payload.js";
-import { embeddingSearch } from "./steps/embedding-search.js";
-import { queryExpansion } from "./steps/query-expansion.js";
-import { rerank } from "./steps/rerank.js";
-import { iterativeSearch } from "./steps/iterative-search.js";
-import { classify } from "./steps/classifier.js";
-import type {
-  AlphaloopConfig,
-  AlphaloopRunOptions,
-  AlphaloopStreamEvent,
-  LoopContext,
-} from "./types.js";
+import { alphaloopToolsWithSession } from "./tools.js";
+import type { AlphaloopConfig } from "./types.js";
 
 export type AlphaloopHandlerConfig = AlphaloopConfig & {
   systemPrompt?: string;
@@ -28,7 +16,17 @@ export type AlphaloopHandlerConfig = AlphaloopConfig & {
   maxToolSteps?: number;
 };
 
-const DEFAULT_SYSTEM_PROMPT = `You are a helpful research assistant. When the user asks a question, use the deep_search tool to find relevant information from the knowledge base before answering. Synthesize the retrieved passages into a clear, well-structured response. Cite specific passages when appropriate.`;
+const DEFAULT_SYSTEM_PROMPT = `You are a helpful research assistant operating a bounded search session.
+
+Prefer the low-level tools when the question is ambiguous, requires exact strings, or you need to manage context carefully:
+- search_corpus for retrieval
+- grep_corpus for exact matches
+- read_document for full source expansion
+- prune_chunks when visible context grows too large
+
+Use deep_search when a one-shot compiled retrieval pass is the fastest option.
+
+Always watch the session token usage returned by tools. If the session crosses the soft limit, prune aggressively. If it hits the hard limit, do not call more context-gathering tools until you prune. Synthesize the retrieved passages into a clear response and cite specific passages when appropriate.`;
 
 export function createAlphaloopHandler(config: AlphaloopHandlerConfig) {
   return async function handler(request: Request): Promise<Response> {
@@ -50,72 +48,18 @@ export function createAlphaloopHandler(config: AlphaloopHandlerConfig) {
           system: config.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
           messages: await convertToModelMessages(messages),
           tools: {
-            deep_search: tool({
-              description:
-                "Search the knowledge base using an agentic retrieval loop with query expansion, re-ranking, and iterative refinement.",
-              inputSchema: z.object({
-                query: z.string().describe("The search query"),
-                maxResults: z
-                  .number()
-                  .optional()
-                  .describe("Maximum results to return (default: 20)"),
-                minScore: z
-                  .number()
-                  .optional()
-                  .describe("Minimum vector score a chunk must meet to be considered a strong match"),
-                topK: z
-                  .number()
-                  .int()
-                  .positive()
-                  .optional()
-                  .describe("Limit retrieval to the first K strong matches"),
-                maxContextTokens: z
-                  .number()
-                  .optional()
-                  .describe("Maximum context tokens for any single LLM call"),
-              }),
-              execute: async ({ query, maxResults, minScore, topK, maxContextTokens }) => {
-                const ctx = createStreamingLoopContext(
-                  config,
-                  { minScore, topK, maxContextTokens },
-                  (event) => {
-                    writer.write({
-                      type: "data-search-progress" as any,
-                      data: event,
-                    } as any);
-                  },
-                );
-
-                const initialChunks = await embeddingSearch(query, ctx);
-                await queryExpansion(query, initialChunks, ctx);
-                const allChunks = Array.from(ctx.seenChunks.values());
-                await rerank(query, allChunks, ctx, {
-                  sourceQuery: query,
-                  iteration: 0,
-                });
-                await iterativeSearch(query, ctx);
-
-                if (ctx.config.enableClassifier) {
-                  await classify(query, ctx);
-                }
-
-                const finalChunks = Array.from(ctx.rankedChunks.values())
-                  .sort((a, b) => b.relevance - a.relevance)
-                  .slice(0, maxResults ?? 20);
-                const payload = await buildToolPayload(query, finalChunks, ctx);
-
-                return {
-                  ...payload,
-                  totalConsidered: ctx.seenChunks.size,
-                  totalMatched: ctx.totalChunksMatched,
-                  iterationsRun: ctx.iterations.length,
-                  minScoreUsed: ctx.config.minScore,
-                  topKUsed: ctx.config.topK,
-                  shardCount: ctx.shardCount,
-                  recursionDepth: ctx.recursionDepth,
-                };
+            ...alphaloopToolsWithSession(
+              {
+                ...config,
+                signal: request.signal,
               },
-            }),
+              (event) => {
+                writer.write({
+                  type: "data-search-progress" as any,
+                  data: event,
+                } as any);
+              },
+            ),
             ...config.additionalTools,
           },
           stopWhen: stepCountIs(config.maxToolSteps ?? 5),
@@ -127,38 +71,5 @@ export function createAlphaloopHandler(config: AlphaloopHandlerConfig) {
     });
 
     return createUIMessageStreamResponse({ stream });
-  };
-}
-
-function createStreamingLoopContext(
-  config: AlphaloopConfig,
-  options: AlphaloopRunOptions = {},
-  emit: (event: AlphaloopStreamEvent) => void,
-): LoopContext {
-  return {
-    config: {
-      ...config,
-      minScore: options.minScore ?? config.minScore ?? DEFAULTS.minScore,
-      topK: options.topK ?? config.topK,
-      maxExpandedQueries:
-        config.maxExpandedQueries ?? DEFAULTS.maxExpandedQueries,
-      maxIterations: config.maxIterations ?? DEFAULTS.maxIterations,
-      relevanceThreshold:
-        config.relevanceThreshold ?? DEFAULTS.relevanceThreshold,
-      enableClassifier: config.enableClassifier ?? DEFAULTS.enableClassifier,
-      maxContextTokens:
-        options.maxContextTokens ??
-        config.maxContextTokens ??
-        DEFAULTS.maxContextTokens,
-    },
-    seenChunks: new Map(),
-    rankedChunks: new Map(),
-    triedQueries: new Set(),
-    iterations: [],
-    totalChunksMatched: 0,
-    retrievalRequests: 0,
-    shardCount: 0,
-    recursionDepth: 0,
-    emit,
   };
 }

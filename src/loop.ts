@@ -1,50 +1,16 @@
-import { DEFAULTS } from "./defaults.js";
 import { embeddingSearch } from "./steps/embedding-search.js";
 import { queryExpansion } from "./steps/query-expansion.js";
 import { rerank } from "./steps/rerank.js";
 import { iterativeSearch } from "./steps/iterative-search.js";
 import { classify } from "./steps/classifier.js";
+import { createLoopContext } from "./loop-context.js";
 import type {
   AlphaloopConfig,
   AlphaloopRunOptions,
   AlphaloopResult,
   AlphaloopStreamEvent,
-  LoopContext,
 } from "./types.js";
 import { alphaloopTools } from "./tools.js";
-
-function createLoopContext(
-  config: AlphaloopConfig,
-  options: AlphaloopRunOptions,
-  emit: (event: AlphaloopStreamEvent) => void,
-): LoopContext {
-  return {
-    config: {
-      ...config,
-      minScore: options.minScore ?? config.minScore ?? DEFAULTS.minScore,
-      topK: options.topK ?? config.topK,
-      maxExpandedQueries:
-        config.maxExpandedQueries ?? DEFAULTS.maxExpandedQueries,
-      maxIterations: config.maxIterations ?? DEFAULTS.maxIterations,
-      relevanceThreshold:
-        config.relevanceThreshold ?? DEFAULTS.relevanceThreshold,
-      enableClassifier: config.enableClassifier ?? DEFAULTS.enableClassifier,
-      maxContextTokens:
-        options.maxContextTokens ??
-        config.maxContextTokens ??
-        DEFAULTS.maxContextTokens,
-    },
-    seenChunks: new Map(),
-    rankedChunks: new Map(),
-    triedQueries: new Set(),
-    iterations: [],
-    totalChunksMatched: 0,
-    retrievalRequests: 0,
-    shardCount: 0,
-    recursionDepth: 0,
-    emit,
-  };
-}
 
 /**
  * Run the full 5-step agentic retrieval loop.

@@ -21,6 +21,7 @@ async function collectPagedMatches(
   search: NonNullable<LoopContext["config"]["search"]>,
 ): Promise<{ chunks: EmbeddingChunk[]; matched: number; requests: number }> {
   const chunks: EmbeddingChunk[] = [];
+  const excludeChunkIds = Array.from(ctx.seenChunks.keys());
   let matched = 0;
   let requests = 0;
   let cursor: string | undefined;
@@ -32,11 +33,13 @@ async function collectPagedMatches(
       topK,
       cursor,
       signal: ctx.config.signal,
+      excludeChunkIds,
     });
     requests++;
 
     const filtered = page.chunks.filter((chunk) =>
-      ctx.config.minScore == null ? true : chunk.score >= ctx.config.minScore,
+      (ctx.config.minScore == null ? true : chunk.score >= ctx.config.minScore) &&
+      !ctx.seenChunks.has(chunk.id),
     );
     const remaining =
       topK == null ? filtered.length : Math.max(topK - chunks.length, 0);
@@ -67,15 +70,20 @@ async function collectStreamMatches(
   let matched = 0;
   let requests = 0;
   const topK = ctx.config.topK;
+  const excludeChunkIds = Array.from(ctx.seenChunks.keys());
 
   for await (const chunk of searchStream(query, {
     minScore: ctx.config.minScore,
     topK,
     signal: ctx.config.signal,
+    excludeChunkIds,
   })) {
     requests++;
 
-    if (ctx.config.minScore != null && chunk.score < ctx.config.minScore) {
+    if (
+      (ctx.config.minScore != null && chunk.score < ctx.config.minScore) ||
+      ctx.seenChunks.has(chunk.id)
+    ) {
       continue;
     }
 
